@@ -128,16 +128,19 @@ with st.sidebar:
     cred_dict = None
 
     if cred_method == "Streamlit Secrets":
-        if "FIREBASE_KEY" in st.secrets:
+        if "firebase" in st.secrets:
+            cred_dict = dict(st.secrets["firebase"])
+            st.markdown('<span class="badge badge-on">✔ Secrets (TOML) carregados</span>', unsafe_allow_html=True)
+        elif "FIREBASE_KEY" in st.secrets:
             try:
                 cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
                 if "private_key" in cred_dict:
                     cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-                st.markdown('<span class="badge badge-on">✔ Secrets carregados</span>', unsafe_allow_html=True)
+                st.markdown('<span class="badge badge-on">✔ Secrets (JSON) carregados</span>', unsafe_allow_html=True)
             except Exception as e:
                 st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
         else:
-            st.markdown('<span class="badge badge-off">✖ FIREBASE_KEY não encontrado</span>', unsafe_allow_html=True)
+            st.markdown('<span class="badge badge-off">✖ Secret não encontrado</span>', unsafe_allow_html=True)
     elif cred_method == "Upload JSON":
         f = st.file_uploader("serviceAccountKey.json", type=["json"])
         if f:
