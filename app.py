@@ -124,10 +124,19 @@ def gauge_fig(value, label, max_temp, alert_temp, color):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🔥 Configuração Firebase")
-    cred_method = st.selectbox("Autenticação", ["Upload JSON", "Colar JSON", "App Default"])
+    cred_method = st.selectbox("Autenticação", ["Streamlit Secrets", "Upload JSON", "Colar JSON", "App Default"])
     cred_dict = None
 
-    if cred_method == "Upload JSON":
+    if cred_method == "Streamlit Secrets":
+        if "FIREBASE_KEY" in st.secrets:
+            try:
+                cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
+                st.markdown('<span class="badge badge-on">✔ Secrets carregados</span>', unsafe_allow_html=True)
+            except Exception as e:
+                st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
+        else:
+            st.markdown('<span class="badge badge-off">✖ FIREBASE_KEY não encontrado</span>', unsafe_allow_html=True)
+    elif cred_method == "Upload JSON":
         f = st.file_uploader("serviceAccountKey.json", type=["json"])
         if f:
             cred_dict = json.load(f)
@@ -142,8 +151,15 @@ with st.sidebar:
                 st.markdown('<span class="badge badge-off">✖ JSON inválido</span>', unsafe_allow_html=True)
 
     st.markdown("---")
-    db_url  = st.text_input("Database URL", value=os.getenv("FIREBASE_DATABASE_URL",""),
-                             placeholder="https://SEU-PROJETO-default-rtdb.firebaseio.com/")
+    # Pega a URL dos Secrets se existir, senao variavel de ambiente
+    default_db_url = ""
+    if "FIREBASE_DATABASE_URL" in st.secrets:
+        default_db_url = st.secrets["FIREBASE_DATABASE_URL"]
+    else:
+        default_db_url = os.getenv("FIREBASE_DATABASE_URL", "")
+
+    db_url  = st.text_input("Database URL", value=default_db_url,
+                             placeholder="https://digital-twin-esp32-default-rtdb.firebaseio.com/")
     db_path = st.text_input("Caminho dos dados", value="/temperatura",
                              placeholder="/temperatura")
 
