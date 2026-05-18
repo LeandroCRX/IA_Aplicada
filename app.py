@@ -64,10 +64,25 @@ def extract_current(data, k1, k2):
     """Extrai temperaturas atuais independente da estrutura do JSON."""
     t1 = t2 = ts = None
     if isinstance(data, dict):
+        if "real_time" in data and isinstance(data["real_time"], dict):
+            t1, t2, ts = extract_current(data["real_time"], k1, k2)
+            if t1 is not None or t2 is not None:
+                return t1, t2, ts
+
         # Estrutura plana: {sensor1: 45.2, sensor2: 47.8, timestamp: ...}
         t1 = data.get(k1) or data.get("temperatura1") or data.get("temp1")
         t2 = data.get(k2) or data.get("temperatura2") or data.get("temp2")
         ts = data.get("timestamp") or data.get("ts") or data.get("time")
+
+        # Se for um dicionário de push keys, pega a última chave (mais recente)
+        if t1 is None and t2 is None:
+            sample = next(iter(data.values()), None)
+            if isinstance(sample, dict) and (k1 in sample or k2 in sample):
+                last_val = data[list(data.keys())[-1]]
+                t1 = last_val.get(k1) or last_val.get("temperatura1") or last_val.get("temp1")
+                t2 = last_val.get(k2) or last_val.get("temperatura2") or last_val.get("temp2")
+                ts = last_val.get("timestamp") or last_val.get("ts") or last_val.get("time")
+
         # Estrutura aninhada: {sensor1: {temperatura: 45.2}, sensor2: {...}}
         if t1 is None and k1 in data and isinstance(data[k1], dict):
             t1 = data[k1].get("temperatura") or data[k1].get("temp") or data[k1].get("value")
@@ -165,7 +180,8 @@ with st.sidebar:
 
     db_url  = st.text_input("Database URL", value=default_db_url,
                              placeholder="https://digital-twin-esp32-default-rtdb.firebaseio.com/")
-    db_path = st.selectbox("Caminho dos dados", ["/long_time", "/real_time"], index=0)
+    db_path_selection = st.selectbox("Caminho dos dados", ["/long_time", "/real_time", "Completo"], index=0)
+    db_path = "/" if db_path_selection == "Completo" else db_path_selection
 
     st.markdown("---")
     st.markdown("**Nomes dos campos no JSON**")
@@ -362,7 +378,7 @@ def dashboard():
         hist_data = None
         if isinstance(data, dict):
             # Verifica se tem sub-nó "historico" ou "history"
-            for hk in ["historico", "history", "medicoes", "readings", "logs"]:
+            for hk in ["historico", "history", "medicoes", "readings", "logs", "long_time"]:
                 if hk in data and isinstance(data[hk], dict):
                     hist_data = data[hk]
                     break
