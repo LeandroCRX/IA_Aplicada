@@ -165,8 +165,7 @@ with st.sidebar:
 
     db_url  = st.text_input("Database URL", value=default_db_url,
                              placeholder="https://digital-twin-esp32-default-rtdb.firebaseio.com/")
-    db_path = st.text_input("Caminho dos dados", value="/long_time",
-                             placeholder="/long_time")
+    db_path = st.selectbox("Caminho dos dados", ["/long_time", "/real_time"], index=0)
 
     st.markdown("---")
     st.markdown("**Nomes dos campos no JSON**")
