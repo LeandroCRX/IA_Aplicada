@@ -139,13 +139,21 @@ def gauge_fig(value, label, max_temp, alert_temp, color):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🔥 Configuração Firebase")
+    
+    projeto_selecionado = st.selectbox("Projeto Firebase", ["Digital Twin ESP32", "Cetel Site"])
+    prefixo_secret = "digital_twin" if projeto_selecionado == "Digital Twin ESP32" else "cetel_site"
+    default_url_placeholder = "https://digital-twin-esp32-default-rtdb.firebaseio.com/" if projeto_selecionado == "Digital Twin ESP32" else "https://cetel-site-default-rtdb.firebaseio.com/"
+
     cred_method = st.selectbox("Autenticação", ["Streamlit Secrets", "Upload JSON", "Colar JSON", "App Default"])
     cred_dict = None
 
     if cred_method == "Streamlit Secrets":
-        if "firebase" in st.secrets:
+        if prefixo_secret in st.secrets and "firebase" in st.secrets[prefixo_secret]:
+            cred_dict = dict(st.secrets[prefixo_secret]["firebase"])
+            st.markdown(f'<span class="badge badge-on">✔ Secrets carregados ({projeto_selecionado})</span>', unsafe_allow_html=True)
+        elif "firebase" in st.secrets:
             cred_dict = dict(st.secrets["firebase"])
-            st.markdown('<span class="badge badge-on">✔ Secrets (TOML) carregados</span>', unsafe_allow_html=True)
+            st.markdown('<span class="badge badge-on">✔ Secrets (padrão) carregados</span>', unsafe_allow_html=True)
         elif "FIREBASE_KEY" in st.secrets:
             try:
                 cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
@@ -171,15 +179,16 @@ with st.sidebar:
                 st.markdown('<span class="badge badge-off">✖ JSON inválido</span>', unsafe_allow_html=True)
 
     st.markdown("---")
-    # Pega a URL dos Secrets se existir, senao variavel de ambiente
     default_db_url = ""
-    if "FIREBASE_DATABASE_URL" in st.secrets:
+    if prefixo_secret in st.secrets and "DATABASE_URL" in st.secrets[prefixo_secret]:
+        default_db_url = st.secrets[prefixo_secret]["DATABASE_URL"]
+    elif "FIREBASE_DATABASE_URL" in st.secrets:
         default_db_url = st.secrets["FIREBASE_DATABASE_URL"]
     else:
         default_db_url = os.getenv("FIREBASE_DATABASE_URL", "")
 
     db_url  = st.text_input("Database URL", value=default_db_url,
-                             placeholder="https://digital-twin-esp32-default-rtdb.firebaseio.com/")
+                             placeholder=default_url_placeholder)
     db_path_selection = st.selectbox("Caminho dos dados", ["/long_time", "/real_time", "Completo"], index=0)
     db_path = "/" if db_path_selection == "Completo" else db_path_selection
 
