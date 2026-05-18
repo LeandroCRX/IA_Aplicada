@@ -162,13 +162,13 @@ with st.sidebar:
 
     db_url  = st.text_input("Database URL", value=default_db_url,
                              placeholder="https://digital-twin-esp32-default-rtdb.firebaseio.com/")
-    db_path = st.text_input("Caminho dos dados", value="/temperatura",
-                             placeholder="/temperatura")
+    db_path = st.text_input("Caminho dos dados", value="/long_time",
+                             placeholder="/long_time")
 
     st.markdown("---")
     st.markdown("**Nomes dos campos no JSON**")
-    key1 = st.text_input("Campo Sensor 1", value="sensor1")
-    key2 = st.text_input("Campo Sensor 2", value="sensor2")
+    key1 = st.text_input("Campo Sensor 1", value="temp_ambiente")
+    key2 = st.text_input("Campo Sensor 2", value="temp_resistor")
 
     st.markdown("---")
     st.markdown("**Configurações de exibição**")
