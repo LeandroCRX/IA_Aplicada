@@ -142,7 +142,7 @@ with st.sidebar:
     
     projeto_selecionado = st.selectbox("Projeto Firebase", ["Digital Twin ESP32", "Cetel Site"])
     prefixo_secret = "digital_twin" if projeto_selecionado == "Digital Twin ESP32" else "cetel_site"
-    default_url_placeholder = "https://digital-twin-esp32-default-rtdb.firebaseio.com/" if projeto_selecionado == "Digital Twin ESP32" else "https://cetel-site-default-rtdb.firebaseio.com/"
+    default_url_placeholder = "https://digital-twin-esp32-default-rtdb.firebaseio.com/" if projeto_selecionado == "Digital Twin ESP32" else "https://cetel-site.firebaseio.com/"
 
     cred_method = st.selectbox("Autenticação", ["Streamlit Secrets", "Upload JSON", "Colar JSON", "App Default"])
     cred_dict = None
@@ -189,7 +189,13 @@ with st.sidebar:
 
     db_url  = st.text_input("Database URL", value=default_db_url,
                              placeholder=default_url_placeholder)
-    db_path_selection = st.selectbox("Caminho dos dados", ["/long_time", "/real_time", "Completo"], index=0)
+    
+    if projeto_selecionado == "Digital Twin ESP32":
+        opcoes_caminho = ["/long_time", "/real_time", "Completo"]
+    else:
+        opcoes_caminho = ["/dispositivos/-OsSLxXdlG3w3AhCdDIQ", "Completo"]
+        
+    db_path_selection = st.selectbox("Caminho dos dados", opcoes_caminho, index=0)
     db_path = "/" if db_path_selection == "Completo" else db_path_selection
 
     st.markdown("---")
