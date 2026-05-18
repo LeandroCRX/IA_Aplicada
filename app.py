@@ -131,6 +131,8 @@ with st.sidebar:
         if "FIREBASE_KEY" in st.secrets:
             try:
                 cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
+                if "private_key" in cred_dict:
+                    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
                 st.markdown('<span class="badge badge-on">✔ Secrets carregados</span>', unsafe_allow_html=True)
             except Exception as e:
                 st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
