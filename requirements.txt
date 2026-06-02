@@ -3,3 +3,6 @@ firebase-admin
 pandas
 plotly
 python-dotenv
+keras
+torch
+openpyxl
