@@ -2,12 +2,35 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, db
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import json, os, time
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Keras / AI Model Helpers ──────────────────────────────────────────────────
+@st.cache_resource
+def load_keras_model():
+    os.environ["KERAS_BACKEND"] = "torch"
+    try:
+        import keras
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+        model = keras.models.model_from_json(json.dumps(config))
+        model.load_weights('model.weights.h5')
+        return model, None
+    except Exception as e:
+        return None, str(e)
+
+def predict_virtual_temp(model, history_window, min_val, max_val):
+    denom = (max_val - min_val) if max_val != min_val else 1.0
+    norm_window = [(x - min_val) / denom for x in history_window]
+    input_data = np.array(norm_window, dtype=np.float32).reshape(1, 12, 1)
+    pred_norm = model.predict(input_data, verbose=0)[0][0]
+    pred_val = pred_norm * denom + min_val
+    return float(pred_val)
 
 st.set_page_config(page_title="ESP32 · Monitor de Temperatura", page_icon="🌡️", layout="wide")
 
@@ -138,6 +161,11 @@ def gauge_fig(value, label, max_temp, alert_temp, color):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("## ⚙️ Modo de Operação")
+    modo_simulacao = st.checkbox("Modo Simulação Local", value=False, key="modo_simulacao",
+                                 help="Simula dados de temperatura localmente para testar a IA sem precisar de conexão com o Firebase.")
+
+    st.markdown("---")
     st.markdown("## 🔥 Configuração Firebase")
     
     projeto_selecionado = st.selectbox("Projeto Firebase", ["Digital Twin ESP32", "Cetel Site"])
@@ -148,22 +176,25 @@ with st.sidebar:
     cred_dict = None
 
     if cred_method == "Streamlit Secrets":
-        if prefixo_secret in st.secrets and "firebase" in st.secrets[prefixo_secret]:
-            cred_dict = dict(st.secrets[prefixo_secret]["firebase"])
-            st.markdown(f'<span class="badge badge-on">✔ Secrets carregados ({projeto_selecionado})</span>', unsafe_allow_html=True)
-        elif "firebase" in st.secrets:
-            cred_dict = dict(st.secrets["firebase"])
-            st.markdown('<span class="badge badge-on">✔ Secrets (padrão) carregados</span>', unsafe_allow_html=True)
-        elif "FIREBASE_KEY" in st.secrets:
-            try:
-                cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
-                if "private_key" in cred_dict:
-                    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-                st.markdown('<span class="badge badge-on">✔ Secrets (JSON) carregados</span>', unsafe_allow_html=True)
-            except Exception as e:
-                st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="badge badge-off">✖ Secret não encontrado</span>', unsafe_allow_html=True)
+        try:
+            if prefixo_secret in st.secrets and "firebase" in st.secrets[prefixo_secret]:
+                cred_dict = dict(st.secrets[prefixo_secret]["firebase"])
+                st.markdown(f'<span class="badge badge-on">✔ Secrets carregados ({projeto_selecionado})</span>', unsafe_allow_html=True)
+            elif "firebase" in st.secrets:
+                cred_dict = dict(st.secrets["firebase"])
+                st.markdown('<span class="badge badge-on">✔ Secrets (padrão) carregados</span>', unsafe_allow_html=True)
+            elif "FIREBASE_KEY" in st.secrets:
+                try:
+                    cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
+                    if "private_key" in cred_dict:
+                        cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+                    st.markdown('<span class="badge badge-on">✔ Secrets (JSON) carregados</span>', unsafe_allow_html=True)
+                except Exception as e:
+                    st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span class="badge badge-off">✖ Secret não encontrado</span>', unsafe_allow_html=True)
+        except Exception:
+            st.markdown('<span class="badge badge-off">✖ Nenhum secrets.toml configurado</span>', unsafe_allow_html=True)
     elif cred_method == "Upload JSON":
         f = st.file_uploader("serviceAccountKey.json", type=["json"])
         if f:
@@ -180,11 +211,14 @@ with st.sidebar:
 
     st.markdown("---")
     default_db_url = ""
-    if prefixo_secret in st.secrets and "DATABASE_URL" in st.secrets[prefixo_secret]:
-        default_db_url = st.secrets[prefixo_secret]["DATABASE_URL"]
-    elif "FIREBASE_DATABASE_URL" in st.secrets:
-        default_db_url = st.secrets["FIREBASE_DATABASE_URL"]
-    else:
+    try:
+        if prefixo_secret in st.secrets and "DATABASE_URL" in st.secrets[prefixo_secret]:
+            default_db_url = st.secrets[prefixo_secret]["DATABASE_URL"]
+        elif "FIREBASE_DATABASE_URL" in st.secrets:
+            default_db_url = st.secrets["FIREBASE_DATABASE_URL"]
+        else:
+            default_db_url = os.getenv("FIREBASE_DATABASE_URL", "")
+    except Exception:
         default_db_url = os.getenv("FIREBASE_DATABASE_URL", "")
 
     db_url  = st.text_input("Database URL", value=default_db_url,
@@ -204,12 +238,19 @@ with st.sidebar:
     key2 = st.text_input("Campo Sensor 2", value="temp_resistor")
 
     st.markdown("---")
+    st.markdown("## 🤖 Termômetro Virtual (IA)")
+    ia_enabled = st.checkbox("Habilitar IA", value=True, key="ia_enabled")
+    ia_input_sensor = st.selectbox("Sensor de entrada", ["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"], key="ia_input_sensor")
+    ia_min_temp = st.number_input("Temp. Mínima de Normalização (°C)", value=20.0, step=1.0, key="ia_min_temp")
+    ia_max_temp = st.number_input("Temp. Máxima de Normalização (°C)", value=100.0, step=1.0, key="ia_max_temp")
+
+    st.markdown("---")
     st.markdown("**Configurações de exibição**")
     alert_t    = st.slider("Temperatura de alerta (°C)", 30, 150, 80)
     max_t      = st.slider("Escala máx. do gauge (°C)", 50, 300, 150)
     refresh_s  = st.selectbox("Auto-refresh", [5, 10, 15, 30, 60], index=1, format_func=lambda x: f"{x}s")
     history_on = st.checkbox("Mostrar histórico", value=True,
-                              help="Apenas se o caminho contiver push keys com registros históricos")
+                               help="Apenas se o caminho contiver push keys com registros históricos")
 
     connect_btn = st.button("🔌 Conectar", use_container_width=True)
 
@@ -232,6 +273,7 @@ with st.sidebar:
                 st.session_state.connected = False
                 st.error(f"Erro: {e}")
 
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
@@ -240,7 +282,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if not st.session_state.connected:
+if not st.session_state.connected and not st.session_state.get("modo_simulacao", False):
     # Tela de boas-vindas
     c1, c2, c3 = st.columns(3)
     for col, icon, title, desc in [
@@ -319,7 +361,45 @@ void loop() {
 # ── Dashboard em tempo real ───────────────────────────────────────────────────
 @st.fragment(run_every=refresh_s)
 def dashboard():
-    data, err = fetch_path(db_path)
+    # ── Fetching Data (Firebase or Mock) ──────────────────────────────────────
+    if st.session_state.get("modo_simulacao", False):
+        if "mock_history" not in st.session_state:
+            now = time.time()
+            history = []
+            for i in range(60):
+                t = now - (60 - i) * refresh_s
+                s1 = 24.5 + 0.6 * np.sin(i / 6.0) + np.random.uniform(-0.15, 0.15)
+                # Sigmoid heating up curve
+                s2 = 25.0 + (55.0 / (1.0 + np.exp(-(i - 15) / 8.0))) + np.random.uniform(-0.25, 0.25)
+                history.append({
+                    "timestamp": t,
+                    "temp_ambiente": s1,
+                    "temp_resistor": s2
+                })
+            st.session_state.mock_history = history
+        else:
+            now = time.time()
+            i = len(st.session_state.mock_history)
+            s1 = 24.5 + 0.6 * np.sin(i / 6.0) + np.random.uniform(-0.15, 0.15)
+            s2 = 25.0 + (55.0 / (1.0 + np.exp(-(i - 15) / 8.0))) + np.random.uniform(-0.25, 0.25)
+            st.session_state.mock_history.append({
+                "timestamp": now,
+                "temp_ambiente": s1,
+                "temp_resistor": s2
+            })
+            st.session_state.mock_history = st.session_state.mock_history[-200:]
+            
+        data = {}
+        for idx, entry in enumerate(st.session_state.mock_history):
+            data[f"mock_key_{idx}"] = {
+                key1: entry["temp_ambiente"],
+                key2: entry["temp_resistor"],
+                "timestamp": entry["timestamp"]
+            }
+        err = None
+    else:
+        data, err = fetch_path(db_path)
+    
     now_str = datetime.now().strftime("%H:%M:%S")
 
     if err:
@@ -332,18 +412,75 @@ def dashboard():
 
     t1, t2, ts = extract_current(data, key1, key2)
 
-    # Status bar
+    # ── Status bar ────────────────────────────────────────────────────────────
     col_st, col_time = st.columns([1, 3])
     with col_st:
         badge = '<span class="badge badge-on">● ONLINE</span>' if (t1 or t2) else '<span class="badge badge-off">● SEM DADOS</span>'
+        if st.session_state.get("modo_simulacao", False):
+            badge = '<span class="badge badge-on" style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid rgba(56,189,248,0.3);">● SIMULAÇÃO</span>'
         st.markdown(badge, unsafe_allow_html=True)
     with col_time:
         ts_str = datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M:%S") if ts and ts > 1e8 else "—"
         st.markdown(f'<span style="font-size:.8rem;color:#475569">Última medição ESP32: {ts_str} &nbsp;|&nbsp; Atualizado: {now_str}</span>', unsafe_allow_html=True)
 
-    # ── KPIs ─────────────────────────────────────────────────────────────────
+    # ── Extract History ───────────────────────────────────────────────────────
+    hist_data = None
+    if isinstance(data, dict):
+        for hk in ["historico", "history", "medicoes", "readings", "logs", "long_time"]:
+            if hk in data and isinstance(data[hk], dict):
+                hist_data = data[hk]
+                break
+        if hist_data is None:
+            sample = next(iter(data.values()), None)
+            if isinstance(sample, dict) and (key1 in sample or key2 in sample):
+                hist_data = data
+
+    df = build_history(hist_data, key1, key2) if hist_data else pd.DataFrame()
+
+    # ── AI virtual thermometer prediction ─────────────────────────────────────
+    pred_val = None
+    ia_status_msg = ""
+    
+    if ia_enabled:
+        model, model_err = load_keras_model()
+        if model_err:
+            ia_status_msg = f"Erro ao carregar modelo IA: {model_err}"
+        elif df.empty or len(df) < 12:
+            ia_status_msg = f"IA: Aguardando dados históricos suficientes (mínimo de 12 leituras, atualmente {len(df)})"
+        else:
+            try:
+                selected_col = "sensor1" if ia_input_sensor == "Sensor 1 (Ambiente)" else "sensor2"
+                values = df[selected_col].values
+                
+                # Rolling prediction for all points where sequence length >= 12
+                predictions = [None] * len(df)
+                start_idx = max(11, len(df) - 100) # last 100 points to keep app fast
+                for idx in range(start_idx, len(df)):
+                    window = values[idx-11 : idx+1]
+                    pred = predict_virtual_temp(model, window, ia_min_temp, ia_max_temp)
+                    predictions[idx] = pred
+                
+                df["pred_val"] = predictions
+                pred_val = predictions[-1]
+                ia_status_msg = "OK"
+            except Exception as e:
+                ia_status_msg = f"Erro na inferência da IA: {e}"
+
+    # ── KPIs ──────────────────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Leitura Atual</div>', unsafe_allow_html=True)
-    k1c, k2c, kdiff, kstat = st.columns(4)
+    
+    # Notice messages for IA
+    if ia_enabled and ia_status_msg != "OK" and ia_status_msg != "":
+        st.info(f"🤖 {ia_status_msg}")
+
+    # Display KPI cards
+    show_ia_card = (ia_enabled and pred_val is not None)
+    cols_kpi = st.columns(5) if show_ia_card else st.columns(4)
+    
+    if show_ia_card:
+        k1c, k2c, kia, kdiff, kstat = cols_kpi
+    else:
+        k1c, k2c, kdiff, kstat = cols_kpi
 
     def kpi(col, label, val, unit="°C", sub=""):
         v_str = f"{val:.1f}" if val is not None else "—"
@@ -355,11 +492,18 @@ def dashboard():
         </div>""", unsafe_allow_html=True)
 
     diff = round(t1 - t2, 2) if (t1 is not None and t2 is not None) else None
-    hot  = (t1 is not None and t1 >= alert_t) or (t2 is not None and t2 >= alert_t)
+    
+    # Status thermal check (also checks IA virtual thermometer)
+    hot = (t1 is not None and t1 >= alert_t) or (t2 is not None and t2 >= alert_t) or (pred_val is not None and pred_val >= alert_t)
 
-    kpi(k1c,  "Sensor 1", t1, sub=f"Campo: `{key1}`")
-    kpi(k2c,  "Sensor 2", t2, sub=f"Campo: `{key2}`")
-    kpi(kdiff,"Diferença S1-S2", diff, sub="Entre sensores")
+    kpi(k1c, "Sensor 1", t1, sub=f"Campo: `{key1}`")
+    kpi(k2c, "Sensor 2", t2, sub=f"Campo: `{key2}`")
+    
+    if show_ia_card:
+        kpi(kia, "Termômetro Virtual (IA)", pred_val, sub=f"Previsão (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
+        
+    kpi(kdiff, "Diferença S1-S2", diff, sub="Entre sensores")
+    
     with kstat:
         st.markdown(f"""
         <div class="kpi">
@@ -370,41 +514,35 @@ def dashboard():
           <div class="kpi-sub">Limiar: {alert_t} °C</div>
         </div>""", unsafe_allow_html=True)
 
-    # ── Alerta ───────────────────────────────────────────────────────────────
+    # ── Alerta ────────────────────────────────────────────────────────────────
     if hot:
         victims = []
         if t1 is not None and t1 >= alert_t: victims.append(f"Sensor 1: {t1:.1f} °C")
         if t2 is not None and t2 >= alert_t: victims.append(f"Sensor 2: {t2:.1f} °C")
+        if pred_val is not None and pred_val >= alert_t: victims.append(f"Termômetro Virtual (IA): {pred_val:.1f} °C")
         st.markdown(f'<div class="alert-box alert-hot">🔥 TEMPERATURA ACIMA DO LIMIAR ({alert_t} °C) — {" | ".join(victims)}</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="alert-box alert-ok">✅ Temperaturas dentro do limite normal (abaixo de {alert_t} °C)</div>', unsafe_allow_html=True)
 
-    # ── Gauges ───────────────────────────────────────────────────────────────
+    # ── Gauges ────────────────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Gauges em Tempo Real</div>', unsafe_allow_html=True)
-    g1, g2 = st.columns(2)
+    
+    if show_ia_card:
+        g1, g2, g3 = st.columns(3)
+    else:
+        g1, g2 = st.columns(2)
+        
     with g1:
         st.plotly_chart(gauge_fig(t1, f"Sensor 1 · {key1}", max_t, alert_t, "#38bdf8"), use_container_width=True)
     with g2:
         st.plotly_chart(gauge_fig(t2, f"Sensor 2 · {key2}", max_t, alert_t, "#a78bfa"), use_container_width=True)
+        
+    if show_ia_card:
+        with g3:
+            st.plotly_chart(gauge_fig(pred_val, "Termômetro Virtual (IA)", max_t, alert_t, "#10b981"), use_container_width=True)
 
     # ── Histórico ─────────────────────────────────────────────────────────────
     if history_on:
-        # Tenta encontrar histórico dentro do mesmo nó ou em sub-nó
-        hist_data = None
-        if isinstance(data, dict):
-            # Verifica se tem sub-nó "historico" ou "history"
-            for hk in ["historico", "history", "medicoes", "readings", "logs", "long_time"]:
-                if hk in data and isinstance(data[hk], dict):
-                    hist_data = data[hk]
-                    break
-            # Se não, tenta o próprio nó (push keys)
-            if hist_data is None:
-                sample = next(iter(data.values()), None)
-                if isinstance(sample, dict) and (key1 in sample or key2 in sample):
-                    hist_data = data
-
-        df = build_history(hist_data, key1, key2) if hist_data else pd.DataFrame()
-
         if not df.empty and "datetime" in df.columns and df["datetime"].notna().any():
             st.markdown('<div class="section-title">Histórico de Temperatura</div>', unsafe_allow_html=True)
             fig = go.Figure()
@@ -414,6 +552,12 @@ def dashboard():
             fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor2"], name=f"Sensor 2 ({key2})",
                                      line=dict(color="#a78bfa", width=2), fill="tozeroy",
                                      fillcolor="rgba(167,139,250,0.07)"))
+            
+            # Add Virtual Thermometer line to the chart as requested by the user
+            if ia_enabled and "pred_val" in df.columns and df["pred_val"].notna().any():
+                fig.add_trace(go.Scatter(x=df["datetime"], y=df["pred_val"], name="Termômetro Virtual (IA)",
+                                         line=dict(color="#10b981", width=2.5, dash="dashdot")))
+                
             fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.6)",
                           annotation_text=f"Limiar {alert_t}°C", annotation_font_color="#ef4444")
             fig.update_layout(
@@ -428,14 +572,32 @@ def dashboard():
 
             # Estatísticas do histórico
             st.markdown('<div class="section-title">Estatísticas (histórico)</div>', unsafe_allow_html=True)
-            sc = st.columns(6)
-            for i, (sensor, col_color) in enumerate([(df["sensor1"], "#38bdf8"), (df["sensor2"], "#a78bfa")]):
-                sc[i*3].markdown(f'<div class="kpi"><div class="kpi-label">S{i+1} Mín</div><div class="kpi-value" style="font-size:1.5rem;color:{col_color}">{sensor.min():.1f}°C</div></div>', unsafe_allow_html=True)
-                sc[i*3+1].markdown(f'<div class="kpi"><div class="kpi-label">S{i+1} Méd</div><div class="kpi-value" style="font-size:1.5rem;color:{col_color}">{sensor.mean():.1f}°C</div></div>', unsafe_allow_html=True)
-                sc[i*3+2].markdown(f'<div class="kpi"><div class="kpi-label">S{i+1} Máx</div><div class="kpi-value" style="font-size:1.5rem;color:{col_color}">{sensor.max():.1f}°C</div></div>', unsafe_allow_html=True)
+            
+            # Check number of columns (3 sensors if IA is active)
+            stat_cols_count = 9 if (ia_enabled and "pred_val" in df.columns) else 6
+            sc = st.columns(stat_cols_count)
+            
+            # Sensor 1 Stats
+            sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+            
+            # Sensor 2 Stats
+            sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+            
+            # IA Stats
+            if ia_enabled and "pred_val" in df.columns:
+                ia_valid = df["pred_val"].dropna()
+                if not ia_valid.empty:
+                    sc[6].markdown(f'<div class="kpi"><div class="kpi-label">IA Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.min():.1f}°C</div></div>', unsafe_allow_html=True)
+                    sc[7].markdown(f'<div class="kpi"><div class="kpi-label">IA Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.mean():.1f}°C</div></div>', unsafe_allow_html=True)
+                    sc[8].markdown(f'<div class="kpi"><div class="kpi-label">IA Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.max():.1f}°C</div></div>', unsafe_allow_html=True)
 
     # ── JSON Bruto ────────────────────────────────────────────────────────────
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.code(json.dumps(data, ensure_ascii=False, indent=2, default=str), language="json")
 
 dashboard()
+
