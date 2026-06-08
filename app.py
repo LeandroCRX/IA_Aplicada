@@ -41,7 +41,6 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background: linear-gradient(135deg, #0a0a1a 0%, #0f1729 60%, #0a1628 100%); color: #e2e8f0; }
 [data-testid="stSidebar"] { background: rgba(255,255,255,0.03); border-right: 1px solid rgba(255,255,255,0.07); }
-/* NOVO: Força a cor branca em todos os textos da barra lateral */
 [data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span { color: #ffffff !important; }
 .hero { background: linear-gradient(120deg, #1a3a5c, #0d2137); border: 1px solid rgba(56,189,248,0.2);
         border-radius: 16px; padding: 1.6rem 2rem; margin-bottom: 1.5rem;
@@ -428,16 +427,20 @@ def dashboard():
           <div class="kpi-sub">{sub}</div>
         </div>""", unsafe_allow_html=True)
 
-    diff = round(t1 - t2, 2) if (t1 is not None and t2 is not None) else None
     hot = (t1 is not None and t1 >= alert_t) or (t2 is not None and t2 >= alert_t) or (pred_val is not None and pred_val >= alert_t)
 
     kpi(k1c, "Sensor 1", t1, sub=f"Campo: `{key1}`")
     kpi(k2c, "Sensor 2", t2, sub=f"Campo: `{key2}`")
     
+    # ✨ ATUALIZAÇÃO DO CARTÃO DE DIFERENÇA
     if show_ia_card:
         kpi(kia, "Termômetro Virtual (IA)", pred_val, sub=f"Previsão (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
         
-    kpi(kdiff, "Diferença S1-S2", diff, sub="Entre sensores")
+        diff_val = round(t2 - pred_val, 2) if (t2 is not None and pred_val is not None) else None
+        kpi(kdiff, "Diferença S2 - IA", diff_val, sub="Resistor vs Previsão")
+    else:
+        diff_val = round(t1 - t2, 2) if (t1 is not None and t2 is not None) else None
+        kpi(kdiff, "Diferença S1 - S2", diff_val, sub="Entre sensores")
     
     with kstat:
         st.markdown(f"""
