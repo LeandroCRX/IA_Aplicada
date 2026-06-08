@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import json, os, time
-from datetime import datetime, timezone, timedelta  # Fuso horário corrigido
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -84,7 +84,6 @@ def fetch_path(path):
 
 # ── Parse helpers ─────────────────────────────────────────────────────────────
 def extract_current(data, k1, k2):
-    """Extrai temperaturas atuais independente da estrutura do JSON."""
     t1 = t2 = ts = None
     if isinstance(data, dict):
         if "real_time" in data and isinstance(data["real_time"], dict):
@@ -92,12 +91,10 @@ def extract_current(data, k1, k2):
             if t1 is not None or t2 is not None:
                 return t1, t2, ts
 
-        # Estrutura plana
         t1 = data.get(k1) or data.get("temperatura1") or data.get("temp1")
         t2 = data.get(k2) or data.get("temperatura2") or data.get("temp2")
         ts = data.get("timestamp") or data.get("ts") or data.get("time")
 
-        # Estrutura Push Keys (última chave)
         if t1 is None and t2 is None:
             sample = next(iter(data.values()), None)
             if isinstance(sample, dict) and (k1 in sample or k2 in sample):
@@ -106,7 +103,6 @@ def extract_current(data, k1, k2):
                 t2 = last_val.get(k2) or last_val.get("temperatura2") or last_val.get("temp2")
                 ts = last_val.get("timestamp") or last_val.get("ts") or last_val.get("time")
 
-        # Estrutura aninhada
         if t1 is None and k1 in data and isinstance(data[k1], dict):
             t1 = data[k1].get("temperatura") or data[k1].get("temp") or data[k1].get("value")
         if t2 is None and k2 in data and isinstance(data[k2], dict):
@@ -114,12 +110,10 @@ def extract_current(data, k1, k2):
     return t1, t2, ts
 
 def build_history(data, k1, k2):
-    """Tenta montar DataFrame histórico aplicando correção de fuso horário (-3h)."""
     rows = []
     if not isinstance(data, dict):
         return pd.DataFrame()
     
-    # Define o fuso horário de Brasília (UTC-3)
     fuso_br = timezone(timedelta(hours=-3))
     
     for v in data.values():
@@ -129,7 +123,6 @@ def build_history(data, k1, k2):
         t2 = v.get(k2) or v.get("temperatura2") or v.get("temp2")
         ts = v.get("timestamp") or v.get("ts") or v.get("time")
         if t1 is not None and t2 is not None:
-            # Aplica fuso horário na conversão do timestamp histórico
             dt = datetime.fromtimestamp(ts, fuso_br) if ts and ts > 1e8 else None
             rows.append({"datetime": dt, "sensor1": float(t1), "sensor2": float(t2)})
     if not rows:
@@ -245,7 +238,6 @@ with st.sidebar:
     st.markdown("## 🤖 Termômetro Virtual (IA)")
     ia_enabled = st.checkbox("Habilitar IA", value=True, key="ia_enabled")
     
-    # CONFIGURADO: Sensor 2 (Resistor) agora é o padrão de carregamento (index=1)
     ia_input_sensor = st.selectbox(
         "Sensor de entrada", 
         ["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"], 
@@ -283,7 +275,6 @@ with st.sidebar:
                 st.session_state.connected = False
                 st.error(f"Erro: {e}")
 
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
@@ -306,10 +297,6 @@ if not st.session_state.connected and not st.session_state.get("modo_simulacao",
               <div style="font-weight:700;color:#38bdf8;margin:.5rem 0 .4rem">{title}</div>
               <div style="font-size:.85rem;color:#64748b">{desc}</div>
             </div>""", unsafe_allow_html=True)
-
-    st.markdown("---")
-    with st.expander("📟 Código de exemplo para ESP32 (Arduino)"):
-        st.code(""" // ... Código do ESP32 omitido para fins de scannability ... """, language="cpp")
     st.stop()
 
 # ── Dashboard em tempo real ───────────────────────────────────────────────────
@@ -356,7 +343,6 @@ def dashboard():
 
     t1, t2, ts = extract_current(data, key1, key2)
 
-    # ── Status bar com Correção do Fuso Horário ─────────────────────────────────
     col_st, col_time = st.columns([1, 3])
     with col_st:
         badge = '<span class="badge badge-on">● ONLINE</span>' if (t1 or t2) else '<span class="badge badge-off">● SEM DADOS</span>'
@@ -364,12 +350,10 @@ def dashboard():
             badge = '<span class="badge badge-on" style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid rgba(56,189,248,0.3);">● SIMULAÇÃO</span>'
         st.markdown(badge, unsafe_allow_html=True)
     with col_time:
-        # Fuso horário corrigido para exibição em tempo real (Brasília UTC-3)
         fuso_br = timezone(timedelta(hours=-3))
         ts_str = datetime.fromtimestamp(ts, fuso_br).strftime("%d/%m/%Y %H:%M:%S") if ts and ts > 1e8 else "—"
         st.markdown(f'<span style="font-size:.8rem;color:#475569">Última medição ESP32: {ts_str} &nbsp;|&nbsp; Atualizado: {now_str}</span>', unsafe_allow_html=True)
 
-    # ── Extract History ───────────────────────────────────────────────────────
     hist_data = None
     if isinstance(data, dict):
         for hk in ["historico", "history", "medicoes", "readings", "logs", "long_time"]:
@@ -383,7 +367,6 @@ def dashboard():
 
     df = build_history(hist_data, key1, key2) if hist_data else pd.DataFrame()
 
-    # ── AI virtual thermometer prediction OTIMIZADA ─────────────────────────────
     pred_val = None
     ia_status_msg = ""
     
@@ -400,8 +383,8 @@ def dashboard():
                 
                 predictions = [None] * len(df)
                 
-                # OTIMIZAÇÃO: Loop alterado para inferir apenas os últimos 5 pontos (elimina travamentos)
-                start_idx = max(11, len(df) - 5)
+                # AUMENTADO DE 5 PARA 50 PONTOS CONFORME SOLICITADO
+                start_idx = max(11, len(df) - 50)
                 for idx in range(start_idx, len(df)):
                     window = values[idx-11 : idx+1]
                     pred = predict_virtual_temp(model, window, ia_min_temp, ia_max_temp)
@@ -413,7 +396,6 @@ def dashboard():
             except Exception as e:
                 ia_status_msg = f"Erro na inferência da IA: {e}"
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Leitura Atual</div>', unsafe_allow_html=True)
     
     if ia_enabled and ia_status_msg != "OK" and ia_status_msg != "":
@@ -457,7 +439,6 @@ def dashboard():
           <div class="kpi-sub">Limiar: {alert_t} °C</div>
         </div>""", unsafe_allow_html=True)
 
-    # ── Alerta ────────────────────────────────────────────────────────────────
     if hot:
         victims = []
         if t1 is not None and t1 >= alert_t: victims.append(f"Sensor 1: {t1:.1f} °C")
@@ -467,7 +448,6 @@ def dashboard():
     else:
         st.markdown(f'<div class="alert-box alert-ok">✅ Temperaturas dentro do limite normal (abaixo de {alert_t} °C)</div>', unsafe_allow_html=True)
 
-    # ── Gauges ────────────────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Gauges em Tempo Real</div>', unsafe_allow_html=True)
     
     if show_ia_card:
@@ -484,7 +464,6 @@ def dashboard():
         with g3:
             st.plotly_chart(gauge_fig(pred_val, "Termômetro Virtual (IA)", max_t, alert_t, "#10b981"), use_container_width=True)
 
-    # ── Histórico ─────────────────────────────────────────────────────────────
     if history_on:
         if not df.empty and "datetime" in df.columns and df["datetime"].notna().any():
             st.markdown('<div class="section-title">Histórico de Temperatura</div>', unsafe_allow_html=True)
@@ -505,7 +484,8 @@ def dashboard():
             fig.update_layout(
                 height=320, template="plotly_dark",
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                # LEGENDA TOTALMENTE BRANCA AQUI:
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#FFFFFF", size=12)),
                 margin=dict(t=30, b=20, l=0, r=0),
                 xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
                 yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="°C"),
