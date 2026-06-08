@@ -32,6 +32,21 @@ def predict_virtual_temp(model, history_window, min_val, max_val):
     pred_val = pred_norm * denom + min_val
     return float(pred_val)
 
+def forecast_12_steps(model, history_window, min_val, max_val):
+    future = []
+    window = list(history_window)
+    for _ in range(12):
+        pred = predict_virtual_temp(
+            model,
+            window,
+            min_val,
+            max_val
+        )
+        future.append(pred)
+        window.pop(0)
+        window.append(pred)
+    return future
+
 st.set_page_config(page_title="ESP32 · Monitor de Temperatura", page_icon="🌡️", layout="wide")
 
 # ── CSS ──────────────────────────────────────────────────────────────────────
@@ -109,6 +124,51 @@ def extract_current(data, k1, k2):
         if t2 is None and k2 in data and isinstance(data[k2], dict):
             t2 = data[k2].get("temperatura") or data[k2].get("temp") or data[k2].get("value")
     return t1, t2, ts
+
+def extract_setpoint(data):
+    if not isinstance(data, dict):
+        return None
+    
+    # 1. Se houver real_time, tenta de lá primeiro
+    if "real_time" in data and isinstance(data["real_time"], dict):
+        sp = extract_setpoint(data["real_time"])
+        if sp is not None:
+            return sp
+            
+    # 2. Tenta obter "setpoint" na raiz (ignorando maiúsculas/minúsculas)
+    for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
+        if k in data and not isinstance(data[k], dict):
+            try:
+                return float(data[k])
+            except (ValueError, TypeError):
+                pass
+                
+    # 3. Tenta obter da última chave (se for histórico/lista)
+    try:
+        sample = next(iter(data.values()), None)
+        if isinstance(sample, dict):
+            last_key = list(data.keys())[-1]
+            last_val = data[last_key]
+            for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
+                if k in last_val and not isinstance(last_val[k], dict):
+                    try:
+                        return float(last_val[k])
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        pass
+        
+    # 4. Caso o setpoint esteja em um dicionário (ex: {"setpoint": {"value": 50}})
+    for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
+        if k in data and isinstance(data[k], dict):
+            val = data[k].get("value") or data[k].get("valor") or data[k].get("val")
+            if val is not None:
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    pass
+                    
+    return None
 
 def build_history(data, k1, k2):
     rows = []
@@ -320,14 +380,14 @@ def dashboard():
                 t = now - (60 - i) * refresh_s
                 s1 = 24.5 + 0.6 * np.sin(i / 6.0) + np.random.uniform(-0.15, 0.15)
                 s2 = 25.0 + (55.0 / (1.0 + np.exp(-(i - 15) / 8.0))) + np.random.uniform(-0.25, 0.25)
-                history.append({"timestamp": t, "temp_ambiente": s1, "temp_resistor": s2})
+                history.append({"timestamp": t, "temp_ambiente": s1, "temp_resistor": s2, "setpoint": 50.0})
             st.session_state.mock_history = history
         else:
             now = time.time()
             i = len(st.session_state.mock_history)
             s1 = 24.5 + 0.6 * np.sin(i / 6.0) + np.random.uniform(-0.15, 0.15)
             s2 = 25.0 + (55.0 / (1.0 + np.exp(-(i - 15) / 8.0))) + np.random.uniform(-0.25, 0.25)
-            st.session_state.mock_history.append({"timestamp": now, "temp_ambiente": s1, "temp_resistor": s2})
+            st.session_state.mock_history.append({"timestamp": now, "temp_ambiente": s1, "temp_resistor": s2, "setpoint": 50.0})
             st.session_state.mock_history = st.session_state.mock_history[-200:]
             
         data = {}
@@ -335,7 +395,8 @@ def dashboard():
             data[f"mock_key_{idx}"] = {
                 key1: entry["temp_ambiente"],
                 key2: entry["temp_resistor"],
-                "timestamp": entry["timestamp"]
+                "timestamp": entry["timestamp"],
+                "setpoint": entry.get("setpoint", 50.0)
             }
         err = None
     else:
@@ -352,6 +413,7 @@ def dashboard():
         return
 
     t1, t2, ts = extract_current(data, key1, key2)
+    setpoint_val = extract_setpoint(data)
 
     col_st, col_time = st.columns([1, 3])
     with col_st:
@@ -391,17 +453,23 @@ def dashboard():
                 selected_col = "sensor1" if ia_input_sensor == "Sensor 1 (Ambiente)" else "sensor2"
                 values = df[selected_col].values
                 
-                predictions = [None] * len(df)
-                
-                start_idx = max(11, len(df) - ia_pontos_historico)
-                for idx in range(start_idx, len(df)):
-                    window = values[idx-11 : idx+1]
-                    pred = predict_virtual_temp(model, window, ia_min_temp, ia_max_temp)
-                    predictions[idx] = pred
-                
-                df["pred_val"] = predictions
-                pred_val = predictions[-1]
+                future_predictions = forecast_12_steps(
+                    model,
+                    values[-12:],
+                    ia_min_temp,
+                    ia_max_temp
+                )
+                pred_val = future_predictions[-1]
                 ia_status_msg = "OK"
+                
+                future_df = pd.DataFrame({
+                    "datetime": pd.date_range(
+                        start=df["datetime"].iloc[-1],
+                        periods=13,
+                        freq="min"
+                    )[1:],
+                    "forecast": future_predictions
+                })
             except Exception as e:
                 ia_status_msg = f"Erro na inferência da IA: {e}"
 
@@ -442,15 +510,7 @@ def dashboard():
         diff_val = round(t1 - t2, 2) if (t1 is not None and t2 is not None) else None
         kpi(kdiff, "Diferença S1 - S2", diff_val, sub="Entre sensores")
     
-    with kstat:
-        st.markdown(f"""
-        <div class="kpi">
-          <div class="kpi-label">Status Térmico</div>
-          <div class="kpi-value" style="font-size:1.4rem;padding-top:.3rem">
-            {'🔴 ALERTA' if hot else '🟢 NORMAL'}
-          </div>
-          <div class="kpi-sub">Limiar: {alert_t} °C</div>
-        </div>""", unsafe_allow_html=True)
+    kpi(kstat, "Setpoint", setpoint_val, sub="Firebase")
 
     if hot:
         victims = []
@@ -488,9 +548,9 @@ def dashboard():
                                      line=dict(color="#a78bfa", width=2), fill="tozeroy",
                                      fillcolor="rgba(167,139,250,0.07)"))
             
-            if ia_enabled and "pred_val" in df.columns and df["pred_val"].notna().any():
-                fig.add_trace(go.Scatter(x=df["datetime"], y=df["pred_val"], name="Termômetro Virtual (IA)",
-                                         line=dict(color="#10b981", width=2.5, dash="dashdot")))
+            if ia_enabled and pred_val is not None:
+                fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+12 passos)",
+                                         line=dict(color="#10b981", width=3, dash="dash")))
                 
             fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.6)",
                           annotation_text=f"Limiar {alert_t}°C", annotation_font_color="#ef4444")
