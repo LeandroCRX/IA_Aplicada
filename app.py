@@ -440,7 +440,9 @@ def dashboard():
     df = build_history(hist_data, key1, key2) if hist_data else pd.DataFrame()
 
     pred_val = None
-    ia_status_msg = ""
+future_df = None
+future_predictions = None
+ia_status_msg = ""
     
     if ia_enabled:
         model, model_err = load_keras_model()
@@ -472,6 +474,8 @@ def dashboard():
                 })
             except Exception as e:
                 ia_status_msg = f"Erro na inferência da IA: {e}"
+                future_df = None
+                future_predictions = None
 
     st.markdown('<div class="section-title">Leitura Atual</div>', unsafe_allow_html=True)
     
@@ -548,7 +552,7 @@ def dashboard():
                                      line=dict(color="#a78bfa", width=2), fill="tozeroy",
                                      fillcolor="rgba(167,139,250,0.07)"))
             
-            if ia_enabled and pred_val is not None:
+            if ia_enabled and future_df is not None:
                 fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+12 passos)",
                                          line=dict(color="#10b981", width=3, dash="dash")))
                 
@@ -569,7 +573,7 @@ def dashboard():
             
             st.markdown(f'<div class="section-title">Estatísticas (últimos {pontos_exibicao} pontos)</div>', unsafe_allow_html=True)
             
-            stat_cols_count = 9 if (ia_enabled and "pred_val" in df_stats.columns) else 6
+            stat_cols_count = 9 if (ia_enabled and future_predictions is not None) else 6
             sc = st.columns(stat_cols_count)
             
             sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
@@ -580,12 +584,30 @@ def dashboard():
             sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
             sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
             
-            if ia_enabled and "pred_val" in df_stats.columns:
-                ia_valid = df_stats["pred_val"].dropna()
-                if not ia_valid.empty:
-                    sc[6].markdown(f'<div class="kpi"><div class="kpi-label">IA Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.min():.1f}°C</div></div>', unsafe_allow_html=True)
-                    sc[7].markdown(f'<div class="kpi"><div class="kpi-label">IA Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.mean():.1f}°C</div></div>', unsafe_allow_html=True)
-                    sc[8].markdown(f'<div class="kpi"><div class="kpi-label">IA Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.max():.1f}°C</div></div>', unsafe_allow_html=True)
+            if ia_enabled and future_predictions is not None:
+
+            ia_valid = pd.Series(future_predictions)
+
+            sc[6].markdown(
+                f'<div class="kpi"><div class="kpi-label">IA Mín</div>'
+                f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
+                f'{ia_valid.min():.1f}°C</div></div>',
+                unsafe_allow_html=True
+            )
+
+            sc[7].markdown(
+                f'<div class="kpi"><div class="kpi-label">IA Méd</div>'
+                f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
+                f'{ia_valid.mean():.1f}°C</div></div>',
+                unsafe_allow_html=True
+            )
+
+            sc[8].markdown(
+                f'<div class="kpi"><div class="kpi-label">IA Máx</div>'
+                f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
+                f'{ia_valid.max():.1f}°C</div></div>',
+                unsafe_allow_html=True
+            )
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
