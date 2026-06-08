@@ -440,9 +440,9 @@ def dashboard():
     df = build_history(hist_data, key1, key2) if hist_data else pd.DataFrame()
 
     pred_val = None
-future_df = None
-future_predictions = None
-ia_status_msg = ""
+    future_df = None
+    future_predictions = None
+    ia_status_msg = ""
     
     if ia_enabled:
         model, model_err = load_keras_model()
@@ -585,29 +585,28 @@ ia_status_msg = ""
             sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
             
             if ia_enabled and future_predictions is not None:
+                ia_valid = pd.Series(future_predictions)
 
-            ia_valid = pd.Series(future_predictions)
+                sc[6].markdown(
+                    f'<div class="kpi"><div class="kpi-label">IA Mín</div>'
+                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
+                    f'{ia_valid.min():.1f}°C</div></div>',
+                    unsafe_allow_html=True
+                )
 
-            sc[6].markdown(
-                f'<div class="kpi"><div class="kpi-label">IA Mín</div>'
-                f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                f'{ia_valid.min():.1f}°C</div></div>',
-                unsafe_allow_html=True
-            )
+                sc[7].markdown(
+                    f'<div class="kpi"><div class="kpi-label">IA Méd</div>'
+                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
+                    f'{ia_valid.mean():.1f}°C</div></div>',
+                    unsafe_allow_html=True
+                )
 
-            sc[7].markdown(
-                f'<div class="kpi"><div class="kpi-label">IA Méd</div>'
-                f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                f'{ia_valid.mean():.1f}°C</div></div>',
-                unsafe_allow_html=True
-            )
-
-            sc[8].markdown(
-                f'<div class="kpi"><div class="kpi-label">IA Máx</div>'
-                f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                f'{ia_valid.max():.1f}°C</div></div>',
-                unsafe_allow_html=True
-            )
+                sc[8].markdown(
+                    f'<div class="kpi"><div class="kpi-label">IA Máx</div>'
+                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
+                    f'{ia_valid.max():.1f}°C</div></div>',
+                    unsafe_allow_html=True
+                )
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
