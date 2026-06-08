@@ -533,6 +533,6 @@ def dashboard():
                     sc[8].markdown(f'<div class="kpi"><div class="kpi-label">IA Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.max():.1f}°C</div></div>', unsafe_allow_html=True)
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
-        st.code(json.dumps(data, ensure_ascii=False, indent=2, default=str), language="json")
+        st.json(data)
 
 dashboard()
