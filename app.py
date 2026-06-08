@@ -464,9 +464,13 @@ def dashboard():
                 pred_val = future_predictions[-1]
                 ia_status_msg = "OK"
                 
+                last_dt = df["datetime"].iloc[-1]
+                if pd.isnull(last_dt):
+                    last_dt = datetime.now(timezone(timedelta(hours=-3)))
+                
                 future_df = pd.DataFrame({
                     "datetime": pd.date_range(
-                        start=df["datetime"].iloc[-1],
+                        start=last_dt,
                         periods=13,
                         freq="min"
                     )[1:],
@@ -555,6 +559,15 @@ def dashboard():
             if ia_enabled and future_df is not None:
                 fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+12 passos)",
                                          line=dict(color="#10b981", width=3, dash="dash")))
+                
+            if setpoint_val is not None:
+                fig.add_trace(go.Scatter(
+                    x=[df["datetime"].iloc[0], df["datetime"].iloc[-1]],
+                    y=[setpoint_val, setpoint_val],
+                    name=f"Setpoint ({setpoint_val:.1f}°C)",
+                    line=dict(color="#f59e0b", width=2, dash="dot"),
+                    mode="lines"
+                ))
                 
             fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.6)",
                           annotation_text=f"Limiar {alert_t}°C", annotation_font_color="#ef4444")
