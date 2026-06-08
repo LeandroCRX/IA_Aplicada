@@ -37,10 +37,12 @@ st.set_page_config(page_title="ESP32 · Monitor de Temperatura", page_icon="🌡
 # ── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background: linear-gradient(135deg, #0a0a1a 0%, #0f1729 60%, #0a1628 100%); color: #e2e8f0; }
 [data-testid="stSidebar"] { background: rgba(255,255,255,0.03); border-right: 1px solid rgba(255,255,255,0.07); }
+/* NOVO: Força a cor branca em todos os textos da barra lateral */
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span { color: #ffffff !important; }
 .hero { background: linear-gradient(120deg, #1a3a5c, #0d2137); border: 1px solid rgba(56,189,248,0.2);
         border-radius: 16px; padding: 1.6rem 2rem; margin-bottom: 1.5rem;
         box-shadow: 0 8px 32px rgba(56,189,248,0.1); }
@@ -238,6 +240,15 @@ with st.sidebar:
     st.markdown("## 🤖 Termômetro Virtual (IA)")
     ia_enabled = st.checkbox("Habilitar IA", value=True, key="ia_enabled")
     
+    ia_pontos_historico = st.slider(
+        "Pontos de histórico (IA e Estatísticas)", 
+        min_value=5, 
+        max_value=200, 
+        value=50, 
+        step=5,
+        help="Controla a extensão da linha da IA no gráfico e a janela de cálculo das Estatísticas abaixo."
+    )
+    
     ia_input_sensor = st.selectbox(
         "Sensor de entrada", 
         ["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"], 
@@ -383,8 +394,7 @@ def dashboard():
                 
                 predictions = [None] * len(df)
                 
-                # AUMENTADO DE 5 PARA 50 PONTOS CONFORME SOLICITADO
-                start_idx = max(11, len(df) - 50)
+                start_idx = max(11, len(df) - ia_pontos_historico)
                 for idx in range(start_idx, len(df)):
                     window = values[idx-11 : idx+1]
                     pred = predict_virtual_temp(model, window, ia_min_temp, ia_max_temp)
@@ -484,7 +494,6 @@ def dashboard():
             fig.update_layout(
                 height=320, template="plotly_dark",
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                # LEGENDA TOTALMENTE BRANCA AQUI:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#FFFFFF", size=12)),
                 margin=dict(t=30, b=20, l=0, r=0),
                 xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
@@ -492,21 +501,24 @@ def dashboard():
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            st.markdown('<div class="section-title">Estatísticas (histórico)</div>', unsafe_allow_html=True)
+            pontos_exibicao = ia_pontos_historico if ia_enabled else len(df)
+            df_stats = df.tail(pontos_exibicao)
             
-            stat_cols_count = 9 if (ia_enabled and "pred_val" in df.columns) else 6
+            st.markdown(f'<div class="section-title">Estatísticas (últimos {pontos_exibicao} pontos)</div>', unsafe_allow_html=True)
+            
+            stat_cols_count = 9 if (ia_enabled and "pred_val" in df_stats.columns) else 6
             sc = st.columns(stat_cols_count)
             
-            sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
             
-            sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
             
-            if ia_enabled and "pred_val" in df.columns:
-                ia_valid = df["pred_val"].dropna()
+            if ia_enabled and "pred_val" in df_stats.columns:
+                ia_valid = df_stats["pred_val"].dropna()
                 if not ia_valid.empty:
                     sc[6].markdown(f'<div class="kpi"><div class="kpi-label">IA Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.min():.1f}°C</div></div>', unsafe_allow_html=True)
                     sc[7].markdown(f'<div class="kpi"><div class="kpi-label">IA Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#10b981">{ia_valid.mean():.1f}°C</div></div>', unsafe_allow_html=True)
