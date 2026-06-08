@@ -240,7 +240,12 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("## 🤖 Termômetro Virtual (IA)")
     ia_enabled = st.checkbox("Habilitar IA", value=True, key="ia_enabled")
-    ia_input_sensor = st.selectbox("Sensor de entrada",["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"],index=1,  # <─── Adiciona este parâmetro aqui! key="ia_input_sensor")
+    ia_input_sensor = st.selectbox(
+    "Sensor de entrada", 
+    ["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"], 
+    index=1,  # <─── Adiciona este parâmetro aqui!
+    key="ia_input_sensor"
+)
     ia_min_temp = st.number_input("Temp. Mínima de Normalização (°C)", value=20.0, step=1.0, key="ia_min_temp")
     ia_max_temp = st.number_input("Temp. Máxima de Normalização (°C)", value=100.0, step=1.0, key="ia_max_temp")
 
