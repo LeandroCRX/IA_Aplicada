@@ -353,6 +353,23 @@ with st.sidebar:
                 st.session_state.connected = False
                 st.error(f"Erro: {e}")
 
+    if st.session_state.get("connected", False):
+        st.markdown("---")
+        st.markdown("## 🗑️ Manutenção")
+        confirmar = st.checkbox("Confirmar exclusão do histórico", key="confirmar_exclusao")
+        delete_btn = st.button(
+            "🗑️ Apagar histórico (/long_time)",
+            use_container_width=True,
+            disabled=not confirmar,
+            type="primary"
+        )
+        if delete_btn and confirmar:
+            try:
+                db.reference("/long_time").delete()
+                st.success("✅ Histórico removido com sucesso!")
+            except Exception as e:
+                st.error(f"❌ Erro ao apagar: {e}")
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
