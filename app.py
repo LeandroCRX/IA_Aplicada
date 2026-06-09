@@ -183,9 +183,17 @@ def build_history(data, k1, k2):
         t1 = v.get(k1) or v.get("temperatura1") or v.get("temp1")
         t2 = v.get(k2) or v.get("temperatura2") or v.get("temp2")
         ts = v.get("timestamp") or v.get("ts") or v.get("time")
+        sp = None
+        for spk in ["setpoint", "Setpoint", "setPoint", "set_point"]:
+            if spk in v and not isinstance(v[spk], dict):
+                try:
+                    sp = float(v[spk])
+                    break
+                except (ValueError, TypeError):
+                    pass
         if t1 is not None and t2 is not None:
             dt = datetime.fromtimestamp(ts, fuso_br) if ts and ts > 1e8 else None
-            rows.append({"datetime": dt, "sensor1": float(t1), "sensor2": float(t2)})
+            rows.append({"datetime": dt, "sensor1": float(t1), "sensor2": float(t2), "setpoint": sp})
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows).sort_values("datetime").tail(200)
@@ -510,7 +518,7 @@ def dashboard():
     
     # ✨ ATUALIZAÇÃO DO CARTÃO DE DIFERENÇA
     if show_ia_card:
-        kpi(kia, "Termômetro Virtual (IA)", pred_val, sub=f"Previsão (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
+        kpi(kia, "Previsão 12 passos à frente", pred_val, sub=f"Passo 12 (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
         
         diff_val = round(t2 - pred_val, 2) if (t2 is not None and pred_val is not None) else None
         kpi(kdiff, "Diferença S2 - IA", diff_val, sub="Resistor vs Previsão")
@@ -524,7 +532,7 @@ def dashboard():
         victims = []
         if t1 is not None and t1 >= alert_t: victims.append(f"Sensor 1: {t1:.1f} °C")
         if t2 is not None and t2 >= alert_t: victims.append(f"Sensor 2: {t2:.1f} °C")
-        if pred_val is not None and pred_val >= alert_t: victims.append(f"Termômetro Virtual (IA): {pred_val:.1f} °C")
+        if pred_val is not None and pred_val >= alert_t: victims.append(f"Previsão 12 passos à frente: {pred_val:.1f} °C")
         st.markdown(f'<div class="alert-box alert-hot">🔥 TEMPERATURA ACIMA DO LIMIAR ({alert_t} °C) — {" | ".join(victims)}</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="alert-box alert-ok">✅ Temperaturas dentro do limite normal (abaixo de {alert_t} °C)</div>', unsafe_allow_html=True)
@@ -543,7 +551,7 @@ def dashboard():
         
     if show_ia_card:
         with g3:
-            st.plotly_chart(gauge_fig(pred_val, "Termômetro Virtual (IA)", max_t, alert_t, "#10b981"), use_container_width=True)
+            st.plotly_chart(gauge_fig(pred_val, "Previsão 12 passos à frente", max_t, alert_t, "#10b981"), use_container_width=True)
 
     if history_on:
         if not df.empty and "datetime" in df.columns and df["datetime"].notna().any():
@@ -560,7 +568,15 @@ def dashboard():
                 fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+12 passos)",
                                          line=dict(color="#10b981", width=3, dash="dash")))
                 
-            if setpoint_val is not None:
+            if "setpoint" in df.columns and df["setpoint"].notna().any():
+                fig.add_trace(go.Scatter(
+                    x=df["datetime"],
+                    y=df["setpoint"],
+                    name="Setpoint",
+                    line=dict(color="#f59e0b", width=2, dash="dot"),
+                    mode="lines"
+                ))
+            elif setpoint_val is not None:
                 fig.add_trace(go.Scatter(
                     x=[df["datetime"].iloc[0], df["datetime"].iloc[-1]],
                     y=[setpoint_val, setpoint_val],
@@ -577,7 +593,7 @@ def dashboard():
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#FFFFFF", size=12)),
                 margin=dict(t=30, b=20, l=0, r=0),
                 xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
-                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="°C"),
+                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="°C", range=[10, 50]),
             )
             st.plotly_chart(fig, use_container_width=True)
 
