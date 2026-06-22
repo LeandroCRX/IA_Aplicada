@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import json, os, time
+import joblib  # ── NOVO: Importação essencial para carregar o normalizador do Scikit-Learn
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -24,28 +25,36 @@ def load_keras_model():
     except Exception as e:
         return None, str(e)
 
-def predict_virtual_temp(model, history_window, min_val, max_val):
-    denom = (max_val - min_val) if max_val != min_val else 1.0
-    norm_window = [(x - min_val) / denom for x in history_window]
+@st.cache_resource
+def load_scaler():
+    """Carrega o normalizador automático treinado (MinMaxScaler)"""
+    try:
+        scaler = joblib.load('temperature_scaler.joblib')
+        return scaler, None
+    except Exception as e:
+        return None, str(e)
+
+def predict_virtual_temp(model, scaler, history_window):
+    # O Scikit-Learn exige uma matriz bidimensional (linhas, colunas).
+    # Como enviamos uma janela simples, moldamos para (-1, 1) onde temos 1 coluna.
+    window_2d = np.array(history_window, dtype=np.float32).reshape(-1, 1)
+    
+    # Aplica a normalização oficial guardada no arquivo .joblib
+    norm_window = scaler.transform(window_2d).flatten()
+    
+    # Prepara o formato tridimensional exigido pelo Keras (batch_size, timesteps, features)
     input_data = np.array(norm_window, dtype=np.float32).reshape(1, 12, 1)
     pred_norm = model.predict(input_data, verbose=0)[0][0]
-    pred_val = pred_norm * denom + min_val
+    
+    # Desnormaliza o resultado (Inverse Transform) para voltar à escala real em °C
+    pred_val = scaler.inverse_transform(np.array([[pred_norm]], dtype=np.float32))[0][0]
     return float(pred_val)
 
-def delete_app(app_name):
-    try: firebase_admin.delete_app(firebase_admin.get_app(app_name))
-    except: pass
-
-def forecast_6_steps(model, history_window, min_val, max_val):
+def forecast_6_steps(model, scaler, history_window):
     future = []
     window = list(history_window)
-    for _ in range(6):  # Ajustado para 6 iterações à frente
-        pred = predict_virtual_temp(
-            model,
-            window,
-            min_val,
-            max_val
-        )
+    for _ in range(6):
+        pred = predict_virtual_temp(model, scaler, window)
         future.append(pred)
         window.pop(0)
         window.append(pred)
@@ -132,18 +141,14 @@ def extract_current(data, k1, k2):
 def extract_setpoint(data):
     if not isinstance(data, dict):
         return None
-    
     if "real_time" in data and isinstance(data["real_time"], dict):
         sp = extract_setpoint(data["real_time"])
-        if sp is not None:
-            return sp
+        if sp is not None: return sp
             
     for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
         if k in data and not isinstance(data[k], dict):
-            try:
-                return float(data[k])
-            except (ValueError, TypeError):
-                pass
+            try: return float(data[k])
+            except (ValueError, TypeError): pass
                 
     try:
         sample = next(iter(data.values()), None)
@@ -152,34 +157,25 @@ def extract_setpoint(data):
             last_val = data[last_key]
             for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
                 if k in last_val and not isinstance(last_val[k], dict):
-                    try:
-                        return float(last_val[k])
-                    except (ValueError, TypeError):
-                        pass
-    except Exception:
-        pass
+                    try: return float(last_val[k])
+                    except (ValueError, TypeError): pass
+    except Exception: pass
         
     for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
         if k in data and isinstance(data[k], dict):
             val = data[k].get("value") or data[k].get("valor") or data[k].get("val")
             if val is not None:
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    pass
-                    
+                try: return float(val)
+                except (ValueError, TypeError): pass
     return None
 
 def build_history(data, k1, k2):
     rows = []
     if not isinstance(data, dict):
         return pd.DataFrame()
-    
     fuso_br = timezone(timedelta(hours=-3))
-    
     for v in data.values():
-        if not isinstance(v, dict):
-            continue
+        if not isinstance(v, dict): continue
         t1 = v.get(k1) or v.get("temperatura1") or v.get("temp1")
         t2 = v.get(k2) or v.get("temperatura2") or v.get("temp2")
         ts = v.get("timestamp") or v.get("ts") or v.get("time")
@@ -189,13 +185,11 @@ def build_history(data, k1, k2):
                 try:
                     sp = float(v[spk])
                     break
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError): pass
         if t1 is not None and t2 is not None:
             dt = datetime.fromtimestamp(ts, fuso_br) if ts and ts > 1e8 else None
             rows.append({"datetime": dt, "sensor1": float(t1), "sensor2": float(t2), "setpoint": sp})
-    if not rows:
-        return pd.DataFrame()
+    if not rows: return pd.DataFrame()
     df = pd.DataFrame(rows).sort_values("datetime").tail(200)
     return df
 
@@ -322,8 +316,9 @@ with st.sidebar:
         index=1, 
         key="ia_input_sensor"
     )
-    ia_min_temp = st.number_input("Temp. Mínima de Normalização (°C)", value=20.0, step=1.0, key="ia_min_temp")
-    ia_max_temp = st.number_input("Temp. Máxima de Normalização (°C)", value=100.0, step=1.0, key="ia_max_temp")
+    
+    # OBSERVAÇÃO DE PROGRAMAÇÃO: Os inputs manuais ia_min_temp e ia_max_temp foram removidos 
+    # daqui porque o arquivo temperature_scaler.joblib já automatiza esse processo!
 
     st.markdown("---")
     st.markdown("**Configurações de exibição**")
@@ -374,7 +369,7 @@ with st.sidebar:
 st.markdown("""
 <div class="hero">
   <h1>🌡️ Monitor de Temperatura · ESP32</h1>
-  <p>Leitura em tempo real de dois sensores de temperatura no resistor via Firebase</p>
+  <p>Leitura em tempo real de dois sensores de temperatura no resistor via Firebase com Normalizador Joblib</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -471,21 +466,27 @@ def dashboard():
     
     if ia_enabled:
         model, model_err = load_keras_model()
+        scaler, scaler_err = load_scaler()  # ── Carrega o arquivo .joblib integrado
+        
         if model_err:
             ia_status_msg = f"Erro ao carregar modelo IA: {model_err}"
+        elif scaler_err:
+            ia_status_msg = f"Erro ao carregar Normalizador (Joblib): {scaler_err}"
         elif df.empty or len(df) < 12:
             ia_status_msg = f"IA: Aguardando dados históricos suficientes (mínimo de 12 leituras, atualmente {len(df)})"
         else:
             try:
                 selected_col = "sensor1" if ia_input_sensor == "Sensor 1 (Ambiente)" else "sensor2"
-                values = df[selected_col].values
+                raw_values = df[selected_col].values
                 
-                # Executa a previsão reduzida para 6 passos
+                # Aplicação da Média Móvel de 3 pontos para eliminar ruídos de leitura de hardware
+                smoothed_values = pd.Series(raw_values).rolling(window=3, min_periods=1).mean().values
+                
+                # Executa a previsão de 6 passos enviando o Scaler e os dados limpos
                 future_predictions = forecast_6_steps(
                     model,
-                    values[-12:],
-                    ia_min_temp,
-                    ia_max_temp
+                    scaler,
+                    smoothed_values[-12:]
                 )
                 pred_val = future_predictions[-1]
                 ia_status_msg = "OK"
@@ -494,24 +495,19 @@ def dashboard():
                 if pd.isnull(last_dt):
                     last_dt = datetime.now(timezone(timedelta(hours=-3)))
                 
-                # 1. Calcula o intervalo real entre amostras
-                intervalo_seg = refresh_s
                 if len(df) > 1:
-                    dt_last = df["datetime"].iloc[-1]
-                    dt_prev = df["datetime"].iloc[-2]
-                    if pd.notna(dt_last) and pd.notna(dt_prev):
-                        calc_diff = (dt_last - dt_prev).total_seconds()
-                        if calc_diff > 0: 
-                            intervalo_seg = calc_diff
+                    intervalo_seg = (df["datetime"].iloc[-1] - df["datetime"].iloc[-2]).total_seconds()
+                    if intervalo_seg <= 0: 
+                        intervalo_seg = refresh_s
+                else:
+                    intervalo_seg = refresh_s
 
-                # 2. Cria os tempos futuros dinamicamente (passo 0 até passo 6 = 7 pontos)
                 future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(7)]
                 
-                # 3. Conecta a linha histórica com a previsão
-                last_real_value = df[selected_col].iloc[-1]
+                # Conecta graficamente o último ponto suavizado com o início da previsão da IA
+                last_real_value = smoothed_values[-1]
                 plot_predictions = [last_real_value] + future_predictions
 
-                # 4. Monta o DataFrame para o gráfico
                 future_df = pd.DataFrame({
                     "datetime": future_times,
                     "forecast": plot_predictions
@@ -549,8 +545,7 @@ def dashboard():
     kpi(k2c, "Sensor 2", t2, sub=f"Campo: `{key2}`")
     
     if show_ia_card:
-        kpi(kia, "Previsão 6 passos à frente", pred_val, sub=f"Passo 6 (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
-        
+        kpi(kia, "Previsão 6 passos à frente", pred_val, sub=f"Passo 6 (Joblib MinMaxScaler)")
         diff_val = round(t2 - pred_val, 2) if (t2 is not None and pred_val is not None) else None
         kpi(kdiff, "Diferença S2 - IA", diff_val, sub="Resistor vs Previsão")
     else:
@@ -563,7 +558,7 @@ def dashboard():
         victims = []
         if t1 is not None and t1 >= alert_t: victims.append(f"Sensor 1: {t1:.1f} °C")
         if t2 is not None and t2 >= alert_t: victims.append(f"Sensor 2: {t2:.1f} °C")
-        if pred_val is not None and pred_val >= alert_t: victims.append(f"Previsão 6 passos à frente: {pred_val:.1f} °C")
+        if pred_val is not None and pred_val >= alert_t: victims.append(f"Previsão 6 passos: {pred_val:.1f} °C")
         st.markdown(f'<div class="alert-box alert-hot">🔥 TEMPERATURA ACIMA DO LIMIAR ({alert_t} °C) — {" | ".join(victims)}</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="alert-box alert-ok">✅ Temperaturas dentro do limite normal (abaixo de {alert_t} °C)</div>', unsafe_allow_html=True)
@@ -575,56 +570,40 @@ def dashboard():
     else:
         g1, g2 = st.columns(2)
         
-    with g1:
-        st.plotly_chart(gauge_fig(t1, f"Sensor 1 · {key1}", max_t, alert_t, "#38bdf8"), use_container_width=True)
-    with g2:
-        st.plotly_chart(gauge_fig(t2, f"Sensor 2 · {key2}", max_t, alert_t, "#a78bfa"), use_container_width=True)
-        
+    with g1: st.plotly_chart(gauge_fig(t1, f"Sensor 1 · {key1}", max_t, alert_t, "#38bdf8"), use_container_width=True)
+    with g2: st.plotly_chart(gauge_fig(t2, f"Sensor 2 · {key2}", max_t, alert_t, "#a78bfa"), use_container_width=True)
     if show_ia_card:
-        with g3:
-            st.plotly_chart(gauge_fig(pred_val, "Previsão 6 passos à frente", max_t, alert_t, "#10b981"), use_container_width=True)
+        with g3: st.plotly_chart(gauge_fig(pred_val, "Previsão IA (6 passos)", max_t, alert_t, "#10b981"), use_container_width=True)
 
     if history_on:
         if not df.empty and "datetime" in df.columns and df["datetime"].notna().any():
             st.markdown('<div class="section-title">Histórico de Temperatura</div>', unsafe_allow_html=True)
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor1"], name=f"Sensor 1 ({key1})",
-                                     line=dict(color="#38bdf8", width=2), fill="tozeroy",
-                                     fillcolor="rgba(56,189,248,0.07)"))
+                                     mode="lines", line=dict(color="#38bdf8", width=2), fill="tozeroy", fillcolor="rgba(56,189,248,0.07)"))
             fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor2"], name=f"Sensor 2 ({key2})",
-                                     line=dict(color="#a78bfa", width=2), fill="tozeroy",
-                                     fillcolor="rgba(167,139,250,0.07)"))
+                                     mode="lines", line=dict(color="#a78bfa", width=2), fill="tozeroy", fillcolor="rgba(167,139,250,0.07)"))
             
             if ia_enabled and future_df is not None:
                 fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+6 passos)",
+                                         mode="lines+markers", marker=dict(size=7, symbol="circle"),
                                          line=dict(color="#10b981", width=3, dash="dash")))
                 
-            if "setpoint" in df.columns and df["setpoint"].notna().any():
+            if setpoint_val is not None:
                 fig.add_trace(go.Scatter(
-                    x=df["datetime"],
-                    y=df["setpoint"],
-                    name="Setpoint",
-                    line=dict(color="#f59e0b", width=2, dash="dot"),
-                    mode="lines"
-                ))
-            elif setpoint_val is not None:
-                fig.add_trace(go.Scatter(
-                    x=[df["datetime"].iloc[0], df["datetime"].iloc[-1]],
-                    y=[setpoint_val, setpoint_val],
-                    name=f"Setpoint ({setpoint_val:.1f}°C)",
-                    line=dict(color="#f59e0b", width=2, dash="dot"),
-                    mode="lines"
+                    x=[df["datetime"].iloc[0], (future_df["datetime"].iloc[-1] if future_df is not None else df["datetime"].iloc[-1])],
+                    y=[setpoint_val, setpoint_val], name=f"Setpoint ({setpoint_val:.1f}°C)",
+                    line=dict(color="#f59e0b", width=2, dash="dot"), mode="lines"
                 ))
                 
             fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.6)",
                           annotation_text=f"Limiar {alert_t}°C", annotation_font_color="#ef4444")
             fig.update_layout(
-                height=320, template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                height=350, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#FFFFFF", size=12)),
                 margin=dict(t=30, b=20, l=0, r=0),
                 xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
-                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="°C", range=[10, 50]),
+                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="°C", autorange=True),
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -632,41 +611,13 @@ def dashboard():
             df_stats = df.tail(pontos_exibicao)
             
             st.markdown(f'<div class="section-title">Estatísticas (últimos {pontos_exibicao} pontos)</div>', unsafe_allow_html=True)
-            
-            stat_cols_count = 9 if (ia_enabled and future_predictions is not None) else 6
-            sc = st.columns(stat_cols_count)
-            
+            sc = st.columns(6)
             sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
             sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
             sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
-            
             sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
             sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
             sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
-            
-            if ia_enabled and future_predictions is not None:
-                ia_valid = pd.Series(future_predictions)
-
-                sc[6].markdown(
-                    f'<div class="kpi"><div class="kpi-label">IA Mín</div>'
-                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                    f'{ia_valid.min():.1f}°C</div></div>',
-                    unsafe_allow_html=True
-                )
-
-                sc[7].markdown(
-                    f'<div class="kpi"><div class="kpi-label">IA Méd</div>'
-                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                    f'{ia_valid.mean():.1f}°C</div></div>',
-                    unsafe_allow_html=True
-                )
-
-                sc[8].markdown(
-                    f'<div class="kpi"><div class="kpi-label">IA Máx</div>'
-                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                    f'{ia_valid.max():.1f}°C</div></div>',
-                    unsafe_allow_html=True
-                )
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
