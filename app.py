@@ -93,7 +93,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Firebase helpers ──────────────────────────────────────────────────────────
+# ── Firebase e UI Helpers ─────────────────────────────────────────────────────
 def init_firebase(cred_dict, db_url):
     if firebase_admin._apps:
         try: firebase_admin.delete_app(firebase_admin.get_app())
@@ -107,7 +107,6 @@ def fetch_path(path):
     except Exception as e:
         return None, str(e)
 
-# ── Parse helpers ─────────────────────────────────────────────────────────────
 def extract_current(data, k1, k2):
     t1 = t2 = ts = None
     if isinstance(data, dict):
@@ -189,10 +188,48 @@ def build_history(data, k1, k2):
     df = pd.DataFrame(rows).sort_values("datetime").tail(200)
     return df
 
+# ── NOVA FUNÇÃO RESTAURADA (Criar Cartões KPI) ──
+def kpi(col, label, val, unit="°C", sub="", color="#f1f5f9"):
+    v_str = f"{val:.1f}" if val is not None else "—"
+    col.markdown(f"""
+    <div class="kpi">
+      <div class="kpi-label">{label}</div>
+      <div class="kpi-value" style="color:{color}">{v_str}<span class="kpi-unit"> {unit if val is not None else ''}</span></div>
+      <div class="kpi-sub">{sub}</div>
+    </div>""", unsafe_allow_html=True)
+
+def gauge_fig(value, label, max_temp, alert_temp, color):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=value if value is not None else 0,
+        number={"suffix": " °C", "font": {"size": 36, "color": "#f1f5f9"}},
+        delta={"reference": alert_temp, "suffix": "°C",
+               "increasing": {"color": "#ef4444"}, "decreasing": {"color": "#22c55e"}},
+        title={"text": label, "font": {"size": 14, "color": "#94a3b8"}},
+        gauge={
+            "axis": {"range": [0, max_temp], "tickcolor": "#475569", "tickwidth": 1,
+                     "tickfont": {"color": "#475569", "size": 10}},
+            "bar": {"color": color, "thickness": 0.25},
+            "bgcolor": "rgba(0,0,0,0)",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0, alert_temp * 0.7], "color": "rgba(34,197,94,0.1)"},
+                {"range": [alert_temp * 0.7, alert_temp], "color": "rgba(234,179,8,0.1)"},
+                {"range": [alert_temp, max_temp], "color": "rgba(239,68,68,0.15)"},
+            ],
+            "threshold": {"line": {"color": "#ef4444", "width": 2}, "thickness": 0.8,
+                          "value": alert_temp},
+        }
+    ))
+    fig.update_layout(height=280, margin=dict(t=30, b=10, l=20, r=20),
+                      paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0")
+    return fig
+
 # ── Barra Lateral (Sidebar) ───────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Modo de Operação")
-    modo_simulacao = st.checkbox("Modo Simulação Local", value=False, key="modo_simulacao")
+    modo_simulacao = st.checkbox("Modo Simulação Local", value=False, key="modo_simulacao",
+                                 help="Simula dados de temperatura localmente para testar a IA sem precisar de conexão com o Firebase.")
 
     st.markdown("---")
     st.markdown("## 🔥 Configuração Firebase")
@@ -211,7 +248,7 @@ with st.sidebar:
                 st.markdown(f'<span class="badge badge-on">✔ Secrets carregados</span>', unsafe_allow_html=True)
             elif "firebase" in st.secrets:
                 cred_dict = dict(st.secrets["firebase"])
-                st.markdown('<span class="badge badge-on">✔ Secrets carregados</span>', unsafe_allow_html=True)
+                st.markdown('<span class="badge badge-on">✔ Secrets (padrão) carregados</span>', unsafe_allow_html=True)
             elif "FIREBASE_KEY" in st.secrets:
                 try:
                     cred_dict = json.loads(st.secrets["FIREBASE_KEY"])
@@ -219,11 +256,11 @@ with st.sidebar:
                         cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
                     st.markdown('<span class="badge badge-on">✔ Secrets carregados</span>', unsafe_allow_html=True)
                 except Exception:
-                    st.markdown('<span class="badge badge-off">✖ Erro no JSON</span>', unsafe_allow_html=True)
+                    st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
             else:
                 st.markdown('<span class="badge badge-off">✖ Secret não encontrado</span>', unsafe_allow_html=True)
         except Exception:
-            st.markdown('<span class="badge badge-off">✖ Sem secrets.toml</span>', unsafe_allow_html=True)
+            st.markdown('<span class="badge badge-off">✖ Nenhum secrets.toml configurado</span>', unsafe_allow_html=True)
     elif cred_method == "Upload JSON":
         f = st.file_uploader("serviceAccountKey.json", type=["json"])
         if f:
@@ -245,7 +282,8 @@ with st.sidebar:
             default_db_url = st.secrets[prefixo_secret]["DATABASE_URL"]
         elif "FIREBASE_DATABASE_URL" in st.secrets:
             default_db_url = st.secrets["FIREBASE_DATABASE_URL"]
-    except Exception: pass
+    except Exception:
+        pass
 
     db_url  = st.text_input("Database URL", value=default_db_url, placeholder=default_url_placeholder)
     
@@ -432,7 +470,7 @@ def dashboard():
     
     if show_ia_card:
         kia, kdiff = mid_cols
-        kpi(kia, "Previsão +6 Passos", pred_val, sub="MinMaxScaler Joblib")
+        kpi(kia, "Previsão +6 Passos", pred_val, sub="MinMaxScaler Joblib", color="#10b981")
         diff_val = round(t2 - pred_val, 2) if (t2 is not None and pred_val is not None) else None
         kpi(kdiff, "Diferença S2 - IA", diff_val, sub="Resistor vs Previsão")
     else:
