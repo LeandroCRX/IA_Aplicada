@@ -32,23 +32,28 @@ def predict_virtual_temp(model, history_window, min_val, max_val):
     pred_val = pred_norm * denom + min_val
     return float(pred_val)
 
-def delete_app(app_name):
-    try: firebase_admin.delete_app(firebase_admin.get_app(app_name))
-    except: pass
-
 def forecast_6_steps(model, history_window, min_val, max_val):
     future = []
     window = list(history_window)
-    for _ in range(6):  # Ajustado para 6 iterações à frente
-        pred = predict_virtual_temp(
-            model,
-            window,
-            min_val,
-            max_val
-        )
+    for _ in range(6):
+        pred = predict_virtual_temp(model, window, min_val, max_val)
         future.append(pred)
         window.pop(0)
         window.append(pred)
+    return future
+
+# ── Matemática / Probabilidade ────────────────────────────────────────────────
+def forecast_math_steps(history_window, steps=6):
+    y = np.array(history_window[-8:])
+    if len(y) < 2:
+        return [history_window[-1]] * steps
+    x = np.arange(len(y))
+    m, b = np.polyfit(x, y, 1)
+    future = []
+    last_x = x[-1]
+    for i in range(1, steps + 1):
+        pred = (m * (last_x + i)) + b
+        future.append(float(pred))
     return future
 
 st.set_page_config(page_title="ESP32 · Monitor de Temperatura", page_icon="🌡️", layout="wide")
@@ -229,8 +234,7 @@ def gauge_fig(value, label, max_temp, alert_temp, color):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Modo de Operação")
-    modo_simulacao = st.checkbox("Modo Simulação Local", value=False, key="modo_simulacao",
-                                 help="Simula dados de temperatura localmente para testar a IA sem precisar de conexão com o Firebase.")
+    modo_simulacao = st.checkbox("Modo Simulação Local", value=False, key="modo_simulacao")
 
     st.markdown("---")
     st.markdown("## 🔥 Configuração Firebase")
@@ -246,7 +250,7 @@ with st.sidebar:
         try:
             if prefixo_secret in st.secrets and "firebase" in st.secrets[prefixo_secret]:
                 cred_dict = dict(st.secrets[prefixo_secret]["firebase"])
-                st.markdown(f'<span class="badge badge-on">✔ Secrets carregados ({projeto_selecionado})</span>', unsafe_allow_html=True)
+                st.markdown(f'<span class="badge badge-on">✔ Secrets ({projeto_selecionado})</span>', unsafe_allow_html=True)
             elif "firebase" in st.secrets:
                 cred_dict = dict(st.secrets["firebase"])
                 st.markdown('<span class="badge badge-on">✔ Secrets (padrão) carregados</span>', unsafe_allow_html=True)
@@ -256,12 +260,12 @@ with st.sidebar:
                     if "private_key" in cred_dict:
                         cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
                     st.markdown('<span class="badge badge-on">✔ Secrets (JSON) carregados</span>', unsafe_allow_html=True)
-                except Exception as e:
-                    st.markdown('<span class="badge badge-off">✖ Erro no JSON do Secrets</span>', unsafe_allow_html=True)
+                except Exception:
+                    st.markdown('<span class="badge badge-off">✖ Erro no JSON</span>', unsafe_allow_html=True)
             else:
                 st.markdown('<span class="badge badge-off">✖ Secret não encontrado</span>', unsafe_allow_html=True)
         except Exception:
-            st.markdown('<span class="badge badge-off">✖ Nenhum secrets.toml configurado</span>', unsafe_allow_html=True)
+            st.markdown('<span class="badge badge-off">✖ Sem secrets.toml</span>', unsafe_allow_html=True)
     elif cred_method == "Upload JSON":
         f = st.file_uploader("serviceAccountKey.json", type=["json"])
         if f:
@@ -283,10 +287,8 @@ with st.sidebar:
             default_db_url = st.secrets[prefixo_secret]["DATABASE_URL"]
         elif "FIREBASE_DATABASE_URL" in st.secrets:
             default_db_url = st.secrets["FIREBASE_DATABASE_URL"]
-        else:
-            default_db_url = os.getenv("FIREBASE_DATABASE_URL", "")
     except Exception:
-        default_db_url = os.getenv("FIREBASE_DATABASE_URL", "")
+        pass
 
     db_url  = st.text_input("Database URL", value=default_db_url, placeholder=default_url_placeholder)
     
@@ -299,38 +301,26 @@ with st.sidebar:
     db_path = "/" if db_path_selection == "Completo" else db_path_selection
 
     st.markdown("---")
-    st.markdown("**Nomes dos campos no JSON**")
+    st.markdown("**Nomes dos campos**")
     key1 = st.text_input("Campo Sensor 1", value="temp_ambiente")
     key2 = st.text_input("Campo Sensor 2", value="temp_resistor")
 
     st.markdown("---")
-    st.markdown("## 🤖 Termômetro Virtual (IA)")
-    ia_enabled = st.checkbox("Habilitar IA", value=True, key="ia_enabled")
+    st.markdown("## 🤖 Previsão IA & Matemática")
+    ia_enabled = st.checkbox("Habilitar Previsões", value=True, key="ia_enabled", help="Ativa a Rede Neural e a Regressão Linear.")
     
-    ia_pontos_historico = st.slider(
-        "Pontos de histórico (IA e Estatísticas)", 
-        min_value=5, 
-        max_value=200, 
-        value=50, 
-        step=5,
-        help="Controla a extensão da linha da IA no gráfico e a janela de cálculo das Estatísticas abaixo."
-    )
+    ia_pontos_historico = st.slider("Pontos de histórico (Estatísticas)", 5, 200, 50, 5)
     
-    ia_input_sensor = st.selectbox(
-        "Sensor de entrada", 
-        ["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"], 
-        index=1, 
-        key="ia_input_sensor"
-    )
-    ia_min_temp = st.number_input("Temp. Mínima de Normalização (°C)", value=20.0, step=1.0, key="ia_min_temp")
-    ia_max_temp = st.number_input("Temp. Máxima de Normalização (°C)", value=100.0, step=1.0, key="ia_max_temp")
+    ia_input_sensor = st.selectbox("Sensor Base", ["Sensor 1 (Ambiente)", "Sensor 2 (Resistor)"], index=1)
+    ia_min_temp = st.number_input("Mínima de Normalização (°C)", value=20.0, step=1.0)
+    ia_max_temp = st.number_input("Máxima de Normalização (°C)", value=100.0, step=1.0)
 
     st.markdown("---")
     st.markdown("**Configurações de exibição**")
     alert_t    = st.slider("Temperatura de alerta (°C)", 30, 150, 80)
     max_t      = st.slider("Escala máx. do gauge (°C)", 50, 300, 150)
     refresh_s  = st.selectbox("Auto-refresh", [5, 10, 15, 30, 60], index=1, format_func=lambda x: f"{x}s")
-    history_on = st.checkbox("Mostrar histórico", value=True, help="Apenas se o caminho contiver push keys com registros históricos")
+    history_on = st.checkbox("Mostrar histórico", value=True)
 
     connect_btn = st.button("🔌 Conectar", use_container_width=True)
 
@@ -356,45 +346,26 @@ with st.sidebar:
     if st.session_state.get("connected", False):
         st.markdown("---")
         st.markdown("## 🗑️ Manutenção")
-        confirmar = st.checkbox("Confirmar exclusão do histórico", key="confirmar_exclusao")
-        delete_btn = st.button(
-            "🗑️ Apagar histórico (/long_time)",
-            use_container_width=True,
-            disabled=not confirmar,
-            type="primary"
-        )
+        confirmar = st.checkbox("Confirmar exclusão", key="confirmar_exclusao")
+        delete_btn = st.button("🗑️ Apagar histórico", use_container_width=True, disabled=not confirmar, type="primary")
         if delete_btn and confirmar:
             try:
                 db.reference("/long_time").delete()
-                st.success("✅ Histórico removido com sucesso!")
+                st.success("✅ Removido!")
             except Exception as e:
-                st.error(f"❌ Erro ao apagar: {e}")
+                st.error(f"❌ Erro: {e}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
-  <h1>🌡️ Monitor de Temperatura · ESP32</h1>
-  <p>Leitura em tempo real de dois sensores de temperatura no resistor via Firebase</p>
+  <h1>🌡️ Monitor de Temperatura · Híbrido</h1>
+  <p>Comparativo em tempo real entre Inteligência Artificial (Keras) e Probabilidade Matemática</p>
 </div>
 """, unsafe_allow_html=True)
 
 if not st.session_state.connected and not st.session_state.get("modo_simulacao", False):
-    c1, c2, c3 = st.columns(3)
-    for col, icon, title, desc in [
-        (c1, "1️⃣", "Credenciais Firebase", "Faça upload do `serviceAccountKey.json` gerado no Firebase Console → Contas de serviço."),
-        (c2, "2️⃣", "Caminho & Sensores", "Informe o caminho no banco (ex: `/temperatura`) e os nomes dos campos do JSON."),
-        (c3, "3️⃣", "Conectar", "Clique em **Conectar**. O dashboard atualiza automaticamente no intervalo escolhido."),
-    ]:
-        with col:
-            st.markdown(f"""
-            <div class="kpi" style="text-align:left;padding:1.4rem">
-              <div style="font-size:2rem">{icon}</div>
-              <div style="font-weight:700;color:#38bdf8;margin:.5rem 0 .4rem">{title}</div>
-              <div style="font-size:.85rem;color:#64748b">{desc}</div>
-            </div>""", unsafe_allow_html=True)
     st.stop()
 
-# ── Dashboard em tempo real ───────────────────────────────────────────────────
 @st.fragment(run_every=refresh_s)
 def dashboard():
     if st.session_state.get("modo_simulacao", False):
@@ -449,7 +420,7 @@ def dashboard():
     with col_time:
         fuso_br = timezone(timedelta(hours=-3))
         ts_str = datetime.fromtimestamp(ts, fuso_br).strftime("%d/%m/%Y %H:%M:%S") if ts and ts > 1e8 else "—"
-        st.markdown(f'<span style="font-size:.8rem;color:#475569">Última medição ESP32: {ts_str} &nbsp;|&nbsp; Atualizado: {now_str}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span style="font-size:.8rem;color:#475569">Última medição: {ts_str} &nbsp;|&nbsp; Atualizado: {now_str}</span>', unsafe_allow_html=True)
 
     hist_data = None
     if isinstance(data, dict):
@@ -464,209 +435,164 @@ def dashboard():
 
     df = build_history(hist_data, key1, key2) if hist_data else pd.DataFrame()
 
-    pred_val = None
+    pred_val_ai = None
+    pred_val_math = None
     future_df = None
-    future_predictions = None
     ia_status_msg = ""
     
     if ia_enabled:
         model, model_err = load_keras_model()
         if model_err:
-            ia_status_msg = f"Erro ao carregar modelo IA: {model_err}"
+            ia_status_msg = f"Erro Keras: {model_err}"
         elif df.empty or len(df) < 12:
-            ia_status_msg = f"IA: Aguardando dados históricos suficientes (mínimo de 12 leituras, atualmente {len(df)})"
+            ia_status_msg = f"Aguardando dados (mínimo de 12 leituras, temos {len(df)})"
         else:
             try:
                 selected_col = "sensor1" if ia_input_sensor == "Sensor 1 (Ambiente)" else "sensor2"
                 values = df[selected_col].values
                 
-                # Executa a previsão reduzida para 6 passos
-                future_predictions = forecast_6_steps(
-                    model,
-                    values[-12:],
-                    ia_min_temp,
-                    ia_max_temp
-                )
-                pred_val = future_predictions[-1]
+                # 1. PREVISÃO IA (KERAS)
+                future_predictions_ai = forecast_6_steps(model, values[-12:], ia_min_temp, ia_max_temp)
+                pred_val_ai = future_predictions_ai[-1]
+
+                # 2. PREVISÃO MATEMÁTICA (REGRESSÃO)
+                future_predictions_math = forecast_math_steps(values, steps=6)
+                pred_val_math = future_predictions_math[-1]
+
                 ia_status_msg = "OK"
                 
+                # Montando o eixo X do tempo
                 last_dt = df["datetime"].iloc[-1]
-                if pd.isnull(last_dt):
-                    last_dt = datetime.now(timezone(timedelta(hours=-3)))
+                if pd.isnull(last_dt): last_dt = datetime.now(timezone(timedelta(hours=-3)))
                 
-                # 1. Calcula o intervalo real entre amostras
                 intervalo_seg = refresh_s
                 if len(df) > 1:
                     dt_last = df["datetime"].iloc[-1]
                     dt_prev = df["datetime"].iloc[-2]
                     if pd.notna(dt_last) and pd.notna(dt_prev):
                         calc_diff = (dt_last - dt_prev).total_seconds()
-                        if calc_diff > 0: 
-                            intervalo_seg = calc_diff
+                        if calc_diff > 0: intervalo_seg = calc_diff
 
-                # 2. Cria os tempos futuros dinamicamente (passo 0 até passo 6 = 7 pontos)
                 future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(7)]
-                
-                # 3. Conecta a linha histórica com a previsão
                 last_real_value = df[selected_col].iloc[-1]
-                plot_predictions = [last_real_value] + future_predictions
+                
+                plot_pred_ai = [last_real_value] + future_predictions_ai
+                plot_pred_math = [last_real_value] + future_predictions_math
 
-                # 4. Monta o DataFrame para o gráfico
                 future_df = pd.DataFrame({
                     "datetime": future_times,
-                    "forecast": plot_predictions
+                    "forecast_ai": plot_pred_ai,
+                    "forecast_math": plot_pred_math
                 })
             except Exception as e:
-                ia_status_msg = f"Erro na inferência da IA: {e}"
+                ia_status_msg = f"Erro no cálculo: {e}"
                 future_df = None
-                future_predictions = None
 
     st.markdown('<div class="section-title">Leitura Atual</div>', unsafe_allow_html=True)
     
     if ia_enabled and ia_status_msg != "OK" and ia_status_msg != "":
         st.info(f"🤖 {ia_status_msg}")
 
-    show_ia_card = (ia_enabled and pred_val is not None)
-    cols_kpi = st.columns(5) if show_ia_card else st.columns(4)
+    show_ia_card = (ia_enabled and pred_val_ai is not None and pred_val_math is not None)
+    cols_kpi = st.columns(6) if show_ia_card else st.columns(4)
     
     if show_ia_card:
-        k1c, k2c, kia, kdiff, kstat = cols_kpi
+        k1c, k2c, kia, kmath, kdiff, kstat = cols_kpi
     else:
         k1c, k2c, kdiff, kstat = cols_kpi
 
-    def kpi(col, label, val, unit="°C", sub=""):
+    def kpi(col, label, val, unit="°C", sub="", color="#f1f5f9"):
         v_str = f"{val:.1f}" if val is not None else "—"
         col.markdown(f"""
         <div class="kpi">
           <div class="kpi-label">{label}</div>
-          <div class="kpi-value">{v_str}<span class="kpi-unit"> {unit if val is not None else ''}</span></div>
+          <div class="kpi-value" style="color:{color}">{v_str}<span class="kpi-unit"> {unit if val is not None else ''}</span></div>
           <div class="kpi-sub">{sub}</div>
         </div>""", unsafe_allow_html=True)
 
-    hot = (t1 is not None and t1 >= alert_t) or (t2 is not None and t2 >= alert_t) or (pred_val is not None and pred_val >= alert_t)
+    hot = (t1 is not None and t1 >= alert_t) or (t2 is not None and t2 >= alert_t)
 
-    kpi(k1c, "Sensor 1", t1, sub=f"Campo: `{key1}`")
-    kpi(k2c, "Sensor 2", t2, sub=f"Campo: `{key2}`")
+    kpi(k1c, "Sensor 1", t1, sub=f"`{key1}`")
+    kpi(k2c, "Sensor 2", t2, sub=f"`{key2}`")
     
     if show_ia_card:
-        kpi(kia, "Previsão 6 passos à frente", pred_val, sub=f"Passo 6 (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
+        kpi(kia, "Previsão IA (Keras)", pred_val_ai, sub="Rede Neural (+6)", color="#10b981")
+        kpi(kmath, "Previsão Matemática", pred_val_math, sub="Regressão (+6)", color="#3b82f6")
         
-        diff_val = round(t2 - pred_val, 2) if (t2 is not None and pred_val is not None) else None
-        kpi(kdiff, "Diferença S2 - IA", diff_val, sub="Resistor vs Previsão")
+        diff_val = round(pred_val_ai - pred_val_math, 2) if (pred_val_ai is not None and pred_val_math is not None) else None
+        kpi(kdiff, "Diferença IA / Mat", diff_val, sub="IA - Matemática")
     else:
         diff_val = round(t1 - t2, 2) if (t1 is not None and t2 is not None) else None
         kpi(kdiff, "Diferença S1 - S2", diff_val, sub="Entre sensores")
     
     kpi(kstat, "Setpoint", setpoint_val, sub="Firebase")
 
-    if hot:
-        victims = []
-        if t1 is not None and t1 >= alert_t: victims.append(f"Sensor 1: {t1:.1f} °C")
-        if t2 is not None and t2 >= alert_t: victims.append(f"Sensor 2: {t2:.1f} °C")
-        if pred_val is not None and pred_val >= alert_t: victims.append(f"Previsão 6 passos à frente: {pred_val:.1f} °C")
-        st.markdown(f'<div class="alert-box alert-hot">🔥 TEMPERATURA ACIMA DO LIMIAR ({alert_t} °C) — {" | ".join(victims)}</div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="alert-box alert-ok">✅ Temperaturas dentro do limite normal (abaixo de {alert_t} °C)</div>', unsafe_allow_html=True)
-
     st.markdown('<div class="section-title">Gauges em Tempo Real</div>', unsafe_allow_html=True)
     
     if show_ia_card:
-        g1, g2, g3 = st.columns(3)
+        g1, g2, g3, g4 = st.columns(4)
     else:
         g1, g2 = st.columns(2)
         
-    with g1:
-        st.plotly_chart(gauge_fig(t1, f"Sensor 1 · {key1}", max_t, alert_t, "#38bdf8"), use_container_width=True)
-    with g2:
-        st.plotly_chart(gauge_fig(t2, f"Sensor 2 · {key2}", max_t, alert_t, "#a78bfa"), use_container_width=True)
+    with g1: st.plotly_chart(gauge_fig(t1, f"Sensor 1", max_t, alert_t, "#38bdf8"), use_container_width=True)
+    with g2: st.plotly_chart(gauge_fig(t2, f"Sensor 2", max_t, alert_t, "#a78bfa"), use_container_width=True)
         
     if show_ia_card:
-        with g3:
-            st.plotly_chart(gauge_fig(pred_val, "Previsão 6 passos à frente", max_t, alert_t, "#10b981"), use_container_width=True)
+        with g3: st.plotly_chart(gauge_fig(pred_val_ai, "IA (+6 passos)", max_t, alert_t, "#10b981"), use_container_width=True)
+        with g4: st.plotly_chart(gauge_fig(pred_val_math, "Matemática (+6 passos)", max_t, alert_t, "#3b82f6"), use_container_width=True)
 
     if history_on:
         if not df.empty and "datetime" in df.columns and df["datetime"].notna().any():
-            st.markdown('<div class="section-title">Histórico de Temperatura</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">Comparativo Histórico vs. Futuro</div>', unsafe_allow_html=True)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor1"], name=f"Sensor 1 ({key1})",
-                                     line=dict(color="#38bdf8", width=2), fill="tozeroy",
-                                     fillcolor="rgba(56,189,248,0.07)"))
-            fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor2"], name=f"Sensor 2 ({key2})",
-                                     line=dict(color="#a78bfa", width=2), fill="tozeroy",
-                                     fillcolor="rgba(167,139,250,0.07)"))
             
+            # Histórico (Linhas preenchidas)
+            fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor1"], name=f"Sensor 1",
+                                     mode="lines", line=dict(color="#38bdf8", width=2), fill="tozeroy", fillcolor="rgba(56,189,248,0.07)"))
+            fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor2"], name=f"Sensor 2",
+                                     mode="lines", line=dict(color="#a78bfa", width=2), fill="tozeroy", fillcolor="rgba(167,139,250,0.07)"))
+            
+            # Previsões Lado a Lado (AGORA COM MARCADORES)
             if ia_enabled and future_df is not None:
-                fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+6 passos)",
+                fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast_ai"], name="Previsão IA (Verde)",
+                                         mode="lines+markers", marker=dict(size=7, symbol="circle"),
                                          line=dict(color="#10b981", width=3, dash="dash")))
                 
-            if "setpoint" in df.columns and df["setpoint"].notna().any():
+                fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast_math"], name="Previsão Matemática (Azul)",
+                                         mode="lines+markers", marker=dict(size=7, symbol="diamond"),
+                                         line=dict(color="#3b82f6", width=3, dash="dot")))
+                
+            if setpoint_val is not None:
                 fig.add_trace(go.Scatter(
-                    x=df["datetime"],
-                    y=df["setpoint"],
-                    name="Setpoint",
-                    line=dict(color="#f59e0b", width=2, dash="dot"),
-                    mode="lines"
-                ))
-            elif setpoint_val is not None:
-                fig.add_trace(go.Scatter(
-                    x=[df["datetime"].iloc[0], df["datetime"].iloc[-1]],
-                    y=[setpoint_val, setpoint_val],
-                    name=f"Setpoint ({setpoint_val:.1f}°C)",
-                    line=dict(color="#f59e0b", width=2, dash="dot"),
-                    mode="lines"
+                    x=[df["datetime"].iloc[0], (future_df["datetime"].iloc[-1] if future_df is not None else df["datetime"].iloc[-1])],
+                    y=[setpoint_val, setpoint_val], name=f"Setpoint ({setpoint_val:.1f}°C)",
+                    line=dict(color="#f59e0b", width=2, dash="dashdot"), mode="lines"
                 ))
                 
             fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.6)",
                           annotation_text=f"Limiar {alert_t}°C", annotation_font_color="#ef4444")
+            
+            # EIXO Y AUTOMÁTICO (autorange=True) PARA NÃO CORTAR AS LINHAS
             fig.update_layout(
-                height=320, template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                height=380, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#FFFFFF", size=12)),
                 margin=dict(t=30, b=20, l=0, r=0),
                 xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
-                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="°C", range=[10, 50]),
+                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", title="Temperatura (°C)", autorange=True),
             )
             st.plotly_chart(fig, use_container_width=True)
 
             pontos_exibicao = ia_pontos_historico if ia_enabled else len(df)
             df_stats = df.tail(pontos_exibicao)
             
-            st.markdown(f'<div class="section-title">Estatísticas (últimos {pontos_exibicao} pontos)</div>', unsafe_allow_html=True)
-            
-            stat_cols_count = 9 if (ia_enabled and future_predictions is not None) else 6
-            sc = st.columns(stat_cols_count)
-            
-            sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#38bdf8">{df_stats["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
-            
-            sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
-            sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.5rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
-            
-            if ia_enabled and future_predictions is not None:
-                ia_valid = pd.Series(future_predictions)
-
-                sc[6].markdown(
-                    f'<div class="kpi"><div class="kpi-label">IA Mín</div>'
-                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                    f'{ia_valid.min():.1f}°C</div></div>',
-                    unsafe_allow_html=True
-                )
-
-                sc[7].markdown(
-                    f'<div class="kpi"><div class="kpi-label">IA Méd</div>'
-                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                    f'{ia_valid.mean():.1f}°C</div></div>',
-                    unsafe_allow_html=True
-                )
-
-                sc[8].markdown(
-                    f'<div class="kpi"><div class="kpi-label">IA Máx</div>'
-                    f'<div class="kpi-value" style="font-size:1.5rem;color:#10b981">'
-                    f'{ia_valid.max():.1f}°C</div></div>',
-                    unsafe_allow_html=True
-                )
+            st.markdown(f'<div class="section-title">Estatísticas do Histórico (últimos {pontos_exibicao} pontos)</div>', unsafe_allow_html=True)
+            sc = st.columns(6)
+            sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.4rem;color:#38bdf8">{df_stats["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.4rem;color:#38bdf8">{df_stats["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.4rem;color:#38bdf8">{df_stats["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.4rem;color:#a78bfa">{df_stats["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.4rem;color:#a78bfa">{df_stats["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.4rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
