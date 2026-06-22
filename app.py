@@ -129,13 +129,11 @@ def extract_setpoint(data):
     if not isinstance(data, dict):
         return None
     
-    # 1. Se houver real_time, tenta de lá primeiro
     if "real_time" in data and isinstance(data["real_time"], dict):
         sp = extract_setpoint(data["real_time"])
         if sp is not None:
             return sp
             
-    # 2. Tenta obter "setpoint" na raiz (ignorando maiúsculas/minúsculas)
     for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
         if k in data and not isinstance(data[k], dict):
             try:
@@ -143,7 +141,6 @@ def extract_setpoint(data):
             except (ValueError, TypeError):
                 pass
                 
-    # 3. Tenta obter da última chave (se for histórico/lista)
     try:
         sample = next(iter(data.values()), None)
         if isinstance(sample, dict):
@@ -158,7 +155,6 @@ def extract_setpoint(data):
     except Exception:
         pass
         
-    # 4. Caso o setpoint esteja em um dicionário (ex: {"setpoint": {"value": 50}})
     for k in ["setpoint", "Setpoint", "setPoint", "set_point"]:
         if k in data and isinstance(data[k], dict):
             val = data[k].get("value") or data[k].get("valor") or data[k].get("val")
@@ -493,15 +489,17 @@ def dashboard():
                 if pd.isnull(last_dt):
                     last_dt = datetime.now(timezone(timedelta(hours=-3)))
                 
-                # 1. Calcula o intervalo real entre as leituras (em segundos)
+                # 1. Calcula o intervalo real (robusto contra valores nulos/NaT)
+                intervalo_seg = refresh_s
                 if len(df) > 1:
-                    intervalo_seg = (df["datetime"].iloc[-1] - df["datetime"].iloc[-2]).total_seconds()
-                    if intervalo_seg <= 0: 
-                        intervalo_seg = refresh_s
-                else:
-                    intervalo_seg = refresh_s
+                    dt_last = df["datetime"].iloc[-1]
+                    dt_prev = df["datetime"].iloc[-2]
+                    if pd.notna(dt_last) and pd.notna(dt_prev):
+                        calc_diff = (dt_last - dt_prev).total_seconds()
+                        if calc_diff > 0: 
+                            intervalo_seg = calc_diff
 
-                # 2. Cria os tempos futuros dinamicamente baseados no intervalo real
+                # 2. Cria os tempos futuros dinamicamente
                 future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(13)]
                 
                 # 3. Conecta a linha histórica com a previsão
@@ -545,7 +543,6 @@ def dashboard():
     kpi(k1c, "Sensor 1", t1, sub=f"Campo: `{key1}`")
     kpi(k2c, "Sensor 2", t2, sub=f"Campo: `{key2}`")
     
-    # ✨ ATUALIZAÇÃO DO CARTÃO DE DIFERENÇA
     if show_ia_card:
         kpi(kia, "Previsão 12 passos à frente", pred_val, sub=f"Passo 12 (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
         
@@ -668,3 +665,6 @@ def dashboard():
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
+
+# >>> CHAMADA OBRIGATÓRIA DA FUNÇÃO DO DASHBOARD <<<
+dashboard()
