@@ -32,10 +32,14 @@ def predict_virtual_temp(model, history_window, min_val, max_val):
     pred_val = pred_norm * denom + min_val
     return float(pred_val)
 
-def forecast_12_steps(model, history_window, min_val, max_val):
+def delete_app(app_name):
+    try: firebase_admin.delete_app(firebase_admin.get_app(app_name))
+    except: pass
+
+def forecast_6_steps(model, history_window, min_val, max_val):
     future = []
     window = list(history_window)
-    for _ in range(12):
+    for _ in range(6):  # Ajustado para 6 iterações à frente
         pred = predict_virtual_temp(
             model,
             window,
@@ -476,7 +480,8 @@ def dashboard():
                 selected_col = "sensor1" if ia_input_sensor == "Sensor 1 (Ambiente)" else "sensor2"
                 values = df[selected_col].values
                 
-                future_predictions = forecast_12_steps(
+                # Executa a previsão reduzida para 6 passos
+                future_predictions = forecast_6_steps(
                     model,
                     values[-12:],
                     ia_min_temp,
@@ -489,7 +494,7 @@ def dashboard():
                 if pd.isnull(last_dt):
                     last_dt = datetime.now(timezone(timedelta(hours=-3)))
                 
-                # 1. Calcula o intervalo real (robusto contra valores nulos/NaT)
+                # 1. Calcula o intervalo real entre amostras
                 intervalo_seg = refresh_s
                 if len(df) > 1:
                     dt_last = df["datetime"].iloc[-1]
@@ -499,8 +504,8 @@ def dashboard():
                         if calc_diff > 0: 
                             intervalo_seg = calc_diff
 
-                # 2. Cria os tempos futuros dinamicamente
-                future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(13)]
+                # 2. Cria os tempos futuros dinamicamente (passo 0 até passo 6 = 7 pontos)
+                future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(7)]
                 
                 # 3. Conecta a linha histórica com a previsão
                 last_real_value = df[selected_col].iloc[-1]
@@ -544,7 +549,7 @@ def dashboard():
     kpi(k2c, "Sensor 2", t2, sub=f"Campo: `{key2}`")
     
     if show_ia_card:
-        kpi(kia, "Previsão 12 passos à frente", pred_val, sub=f"Passo 12 (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
+        kpi(kia, "Previsão 6 passos à frente", pred_val, sub=f"Passo 6 (In: {'S1' if ia_input_sensor == 'Sensor 1 (Ambiente)' else 'S2'})")
         
         diff_val = round(t2 - pred_val, 2) if (t2 is not None and pred_val is not None) else None
         kpi(kdiff, "Diferença S2 - IA", diff_val, sub="Resistor vs Previsão")
@@ -558,7 +563,7 @@ def dashboard():
         victims = []
         if t1 is not None and t1 >= alert_t: victims.append(f"Sensor 1: {t1:.1f} °C")
         if t2 is not None and t2 >= alert_t: victims.append(f"Sensor 2: {t2:.1f} °C")
-        if pred_val is not None and pred_val >= alert_t: victims.append(f"Previsão 12 passos à frente: {pred_val:.1f} °C")
+        if pred_val is not None and pred_val >= alert_t: victims.append(f"Previsão 6 passos à frente: {pred_val:.1f} °C")
         st.markdown(f'<div class="alert-box alert-hot">🔥 TEMPERATURA ACIMA DO LIMIAR ({alert_t} °C) — {" | ".join(victims)}</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="alert-box alert-ok">✅ Temperaturas dentro do limite normal (abaixo de {alert_t} °C)</div>', unsafe_allow_html=True)
@@ -577,7 +582,7 @@ def dashboard():
         
     if show_ia_card:
         with g3:
-            st.plotly_chart(gauge_fig(pred_val, "Previsão 12 passos à frente", max_t, alert_t, "#10b981"), use_container_width=True)
+            st.plotly_chart(gauge_fig(pred_val, "Previsão 6 passos à frente", max_t, alert_t, "#10b981"), use_container_width=True)
 
     if history_on:
         if not df.empty and "datetime" in df.columns and df["datetime"].notna().any():
@@ -591,7 +596,7 @@ def dashboard():
                                      fillcolor="rgba(167,139,250,0.07)"))
             
             if ia_enabled and future_df is not None:
-                fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+12 passos)",
+                fig.add_trace(go.Scatter(x=future_df["datetime"], y=future_df["forecast"], name="Previsão IA (+6 passos)",
                                          line=dict(color="#10b981", width=3, dash="dash")))
                 
             if "setpoint" in df.columns and df["setpoint"].notna().any():
@@ -666,5 +671,4 @@ def dashboard():
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
 
-# >>> CHAMADA OBRIGATÓRIA DA FUNÇÃO DO DASHBOARD <<<
 dashboard()
