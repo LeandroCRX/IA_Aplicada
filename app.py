@@ -188,7 +188,6 @@ def build_history(data, k1, k2):
     df = pd.DataFrame(rows).sort_values("datetime").tail(200)
     return df
 
-# ── NOVA FUNÇÃO RESTAURADA (Criar Cartões KPI) ──
 def kpi(col, label, val, unit="°C", sub="", color="#f1f5f9"):
     v_str = f"{val:.1f}" if val is not None else "—"
     col.markdown(f"""
@@ -518,7 +517,16 @@ def dashboard():
             fig.add_trace(go.Scatter(x=[df["datetime"].iloc[0], end_date], y=[setpoint_val, setpoint_val], name="Setpoint", line=dict(color="#f59e0b", width=1.5, dash="dot"), mode="lines"))
             
         fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.5)")
-        fig.update_layout(height=350, template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(autorange=True))
+        
+        # --- SOLUÇÃO APLICADA AQUI: Adicionado a formatação de fonte da legenda ---
+        fig.update_layout(
+            height=350, 
+            template="plotly_dark", 
+            paper_bgcolor="rgba(0,0,0,0)", 
+            plot_bgcolor="rgba(0,0,0,0)", 
+            yaxis=dict(autorange=True),
+            legend=dict(font=dict(color="white")) # <-- Código adicionado para forçar a cor branca
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         # Painel Inferior de Estatísticas
