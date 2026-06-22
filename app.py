@@ -340,7 +340,6 @@ with st.sidebar:
 # ── Dashboard principal em tempo real ─────────────────────────────────────────
 @st.fragment(run_every=refresh_s)
 def dashboard():
-    ## ── NOVO: Inicialização do armazenamento estável de predições passadas ──
     if "ia_history" not in st.session_state:
         st.session_state.ia_history = {}
 
@@ -353,14 +352,16 @@ def dashboard():
                 t = now - (60 - i) * refresh_s
                 s1 = 24.5 + 0.6 * np.sin(i / 6.0) + np.random.uniform(-0.15, 0.15)
                 s2 = 25.0 + (55.0 / (1.0 + np.exp(-(i - 15) / 8.0))) + np.random.uniform(-0.25, 0.25)
-                history.append({"timestamp": t, "temp_ambiente": s1, "temp_resistor": s2, "setpoint": 50.0})
+                # Simulando variação no setpoint para podermos testar a visualização
+                sp = 50.0 if i < 30 else 60.0
+                history.append({"timestamp": t, "temp_ambiente": s1, "temp_resistor": s2, "setpoint": sp})
             st.session_state.mock_history = history
         else:
             now = time.time()
             i = len(st.session_state.mock_history)
             s1 = 24.5 + 0.6 * np.sin(i / 6.0) + np.random.uniform(-0.15, 0.15)
             s2 = 25.0 + (55.0 / (1.0 + np.exp(-(i - 15) / 8.0))) + np.random.uniform(-0.25, 0.25)
-            st.session_state.mock_history.append({"timestamp": now, "temp_ambiente": s1, "temp_resistor": s2, "setpoint": 50.0})
+            st.session_state.mock_history.append({"timestamp": now, "temp_ambiente": s1, "temp_resistor": s2, "setpoint": 60.0})
             st.session_state.mock_history = st.session_state.mock_history[-200:]
             
         data = {}
@@ -447,7 +448,6 @@ def dashboard():
 
                 future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(7)]
                 
-                # Conexão visual da ponta do gráfico histórico com o início do futuro
                 last_real_value = smoothed_values[-1]
                 plot_predictions = [last_real_value] + future_predictions
 
@@ -456,20 +456,15 @@ def dashboard():
                     "forecast": plot_predictions
                 })
 
-                ## ── NOVO: Registrar a predição para manter o histórico ──
-                # O primeiro item de future_predictions é a previsão exata para o próximo passo (+1)
-                # Associamos ela ao seu tempo correto no futuro (future_times[1])
                 if len(future_times) > 1:
                     tempo_alvo = future_times[1]
                     st.session_state.ia_history[tempo_alvo] = future_predictions[0]
 
-                # Controle de memória: remove registros mais antigos se passar de 200 pontos
                 if len(st.session_state.ia_history) > 200:
                     tempos_ordenados = sorted(st.session_state.ia_history.keys())
                     for tempo_antigo in tempos_ordenados[:-200]:
                         st.session_state.ia_history.pop(tempo_antigo, None)
 
-                # Converte a memória acumulada em um DataFrame para plotar
                 df_ia_hist = pd.DataFrame(
                     list(st.session_state.ia_history.items()), 
                     columns=["datetime", "ia_past_pred"]
@@ -503,7 +498,6 @@ def dashboard():
         
     kpi(kstat, "Setpoint", setpoint_val, sub="Firebase")
 
-    # Alertas de segurança Térmica
     hot = (t1 is not None and t1 >= alert_t) or (t2 is not None and t2 >= alert_t) or (pred_val is not None and pred_val >= alert_t)
     if hot:
         st.markdown(f'<div class="alert-box alert-hot">🔥 TEMPERATURA CRÍTICA (Limiar: {alert_t} °C)</div>', unsafe_allow_html=True)
@@ -525,17 +519,15 @@ def dashboard():
         fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor1"], name="Sensor 1", mode="lines", line=dict(color="#38bdf8", width=2)))
         fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor2"], name="Sensor 2", mode="lines", line=dict(color="#a78bfa", width=2)))
         
-        ## ── NOVO: Adiciona a linha do histórico acumulado de predições passadas ──
         if ia_enabled and 'df_ia_hist' in locals() and not df_ia_hist.empty:
             fig.add_trace(go.Scatter(
                 x=df_ia_hist["datetime"], 
                 y=df_ia_hist["ia_past_pred"], 
                 name="Histórico IA (Passado)",
                 mode="lines", 
-                line=dict(color="#f43f5e", width=2, dash="dot") # Linha pontilhada rosa/coral para destaque
+                line=dict(color="#f43f5e", width=2, dash="dot") 
             ))
 
-        # Inserção explícita da linha de predição futura (6 passos à frente)
         if ia_enabled and future_df is not None:
             fig.add_trace(go.Scatter(
                 x=future_df["datetime"], 
@@ -546,9 +538,36 @@ def dashboard():
                 line=dict(color="#10b981", width=3, dash="dash")
             ))
             
-        if setpoint_val is not None:
+        # ETAPA 1: Ajuste na plotagem do Setpoint para acompanhar variações
+        if "setpoint" in df.columns and df["setpoint"].notna().any():
+            # Linha seguindo o histórico de valores armazenados no DataFrame
+            fig.add_trace(go.Scatter(
+                x=df["datetime"], 
+                y=df["setpoint"], 
+                name="Setpoint (Histórico)", 
+                mode="lines", 
+                line=dict(color="#f59e0b", width=1.5, dash="dot")
+            ))
+            # Estender a linha do Setpoint para a área da previsão futura
+            if future_df is not None and setpoint_val is not None:
+                 fig.add_trace(go.Scatter(
+                    x=[df["datetime"].iloc[-1], future_df["datetime"].iloc[-1]], 
+                    y=[df["setpoint"].iloc[-1], setpoint_val], 
+                    name="Setpoint (Futuro)", 
+                    mode="lines", 
+                    line=dict(color="#f59e0b", width=1.5, dash="dot"),
+                    showlegend=False
+                ))
+        elif setpoint_val is not None:
+            # Fallback caso não exista histórico na coluna, plota reta até o fim do gráfico
             end_date = future_df["datetime"].iloc[-1] if future_df is not None else df["datetime"].iloc[-1]
-            fig.add_trace(go.Scatter(x=[df["datetime"].iloc[0], end_date], y=[setpoint_val, setpoint_val], name="Setpoint", line=dict(color="#f59e0b", width=1.5, dash="dot"), mode="lines"))
+            fig.add_trace(go.Scatter(
+                x=[df["datetime"].iloc[0], end_date], 
+                y=[setpoint_val, setpoint_val], 
+                name="Setpoint", 
+                line=dict(color="#f59e0b", width=1.5, dash="dot"), 
+                mode="lines"
+            ))
             
         fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.5)")
         
@@ -562,16 +581,42 @@ def dashboard():
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Painel Inferior de Estatísticas
+        # ── PAINEL INFERIOR DE ESTATÍSTICAS ──────────────────────────────────────
         df_stats = df.tail(ia_pontos_historico)
+        
+        # ETAPA 2: Extrair métricas do histórico da IA
+        tem_ia_stats = False
+        if ia_enabled and 'df_ia_hist' in locals() and not df_ia_hist.empty:
+            df_ia_stats = df_ia_hist.tail(ia_pontos_historico)
+            if not df_ia_stats.empty:
+                ia_min = df_ia_stats["ia_past_pred"].min()
+                ia_mean = df_ia_stats["ia_past_pred"].mean()
+                ia_max = df_ia_stats["ia_past_pred"].max()
+                tem_ia_stats = True
+        
         st.markdown(f'<div class="section-title">Estatísticas Rápidas (Últimos {len(df_stats)} pontos)</div>', unsafe_allow_html=True)
-        sc = st.columns(6)
+        
+        # Se tivermos dados da IA, dividimos a tela em 9 colunas. Senão, usamos as 6 colunas padrão.
+        if tem_ia_stats:
+            sc = st.columns(9)
+        else:
+            sc = st.columns(6)
+            
+        # Estatísticas do Sensor 1
         sc[0].markdown(f'<div class="kpi"><div class="kpi-label">S1 Mín</div><div class="kpi-value" style="font-size:1.4rem;color:#38bdf8">{df_stats["sensor1"].min():.1f}°C</div></div>', unsafe_allow_html=True)
         sc[1].markdown(f'<div class="kpi"><div class="kpi-label">S1 Méd</div><div class="kpi-value" style="font-size:1.4rem;color:#38bdf8">{df_stats["sensor1"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
         sc[2].markdown(f'<div class="kpi"><div class="kpi-label">S1 Máx</div><div class="kpi-value" style="font-size:1.4rem;color:#38bdf8">{df_stats["sensor1"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+        
+        # Estatísticas do Sensor 2
         sc[3].markdown(f'<div class="kpi"><div class="kpi-label">S2 Mín</div><div class="kpi-value" style="font-size:1.4rem;color:#a78bfa">{df_stats["sensor2"].min():.1f}°C</div></div>', unsafe_allow_html=True)
         sc[4].markdown(f'<div class="kpi"><div class="kpi-label">S2 Méd</div><div class="kpi-value" style="font-size:1.4rem;color:#a78bfa">{df_stats["sensor2"].mean():.1f}°C</div></div>', unsafe_allow_html=True)
         sc[5].markdown(f'<div class="kpi"><div class="kpi-label">S2 Máx</div><div class="kpi-value" style="font-size:1.4rem;color:#a78bfa">{df_stats["sensor2"].max():.1f}°C</div></div>', unsafe_allow_html=True)
+
+        # Estatísticas da IA (se disponíveis) - usando cor coral (#f43f5e) para corresponder ao gráfico
+        if tem_ia_stats:
+            sc[6].markdown(f'<div class="kpi"><div class="kpi-label">IA Mín</div><div class="kpi-value" style="font-size:1.4rem;color:#f43f5e">{ia_min:.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[7].markdown(f'<div class="kpi"><div class="kpi-label">IA Méd</div><div class="kpi-value" style="font-size:1.4rem;color:#f43f5e">{ia_mean:.1f}°C</div></div>', unsafe_allow_html=True)
+            sc[8].markdown(f'<div class="kpi"><div class="kpi-label">IA Máx</div><div class="kpi-value" style="font-size:1.4rem;color:#f43f5e">{ia_max:.1f}°C</div></div>', unsafe_allow_html=True)
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
