@@ -489,12 +489,11 @@ def dashboard():
                 pred_val = future_predictions[-1]
                 ia_status_msg = "OK"
                 
-              last_dt = df["datetime"].iloc[-1]
+                last_dt = df["datetime"].iloc[-1]
                 if pd.isnull(last_dt):
                     last_dt = datetime.now(timezone(timedelta(hours=-3)))
                 
                 # 1. Calcula o intervalo real entre as leituras (em segundos)
-                # Se tivermos menos de 2 pontos, usamos o refresh_s da tela
                 if len(df) > 1:
                     intervalo_seg = (df["datetime"].iloc[-1] - df["datetime"].iloc[-2]).total_seconds()
                     if intervalo_seg <= 0: 
@@ -503,14 +502,10 @@ def dashboard():
                     intervalo_seg = refresh_s
 
                 # 2. Cria os tempos futuros dinamicamente baseados no intervalo real
-                # Criamos 13 pontos (0 é o tempo atual, 1 a 12 são o futuro)
                 future_times = [last_dt + timedelta(seconds=intervalo_seg * i) for i in range(13)]
                 
                 # 3. Conecta a linha histórica com a previsão
-                # Pegamos o último valor real do sensor que serviu de entrada para a IA
                 last_real_value = df[selected_col].iloc[-1]
-                
-                # O array de plotagem terá 13 pontos: [Valor Agora] + [12 Valores Previstos]
                 plot_predictions = [last_real_value] + future_predictions
 
                 # 4. Monta o DataFrame para o gráfico
@@ -673,5 +668,3 @@ def dashboard():
 
     with st.expander("🧩 JSON bruto recebido do Firebase"):
         st.json(data)
-
-dashboard()
