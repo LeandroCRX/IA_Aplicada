@@ -340,6 +340,10 @@ with st.sidebar:
 # ── Dashboard principal em tempo real ─────────────────────────────────────────
 @st.fragment(run_every=refresh_s)
 def dashboard():
+    ## ── NOVO: Inicialização do armazenamento estável de predições passadas ──
+    if "ia_history" not in st.session_state:
+        st.session_state.ia_history = {}
+
     # 1. Captura ou simulação de dados
     if st.session_state.get("modo_simulacao", False):
         if "mock_history" not in st.session_state:
@@ -451,6 +455,26 @@ def dashboard():
                     "datetime": future_times,
                     "forecast": plot_predictions
                 })
+
+                ## ── NOVO: Registrar a predição para manter o histórico ──
+                # O primeiro item de future_predictions é a previsão exata para o próximo passo (+1)
+                # Associamos ela ao seu tempo correto no futuro (future_times[1])
+                if len(future_times) > 1:
+                    tempo_alvo = future_times[1]
+                    st.session_state.ia_history[tempo_alvo] = future_predictions[0]
+
+                # Controle de memória: remove registros mais antigos se passar de 200 pontos
+                if len(st.session_state.ia_history) > 200:
+                    tempos_ordenados = sorted(st.session_state.ia_history.keys())
+                    for tempo_antigo in tempos_ordenados[:-200]:
+                        st.session_state.ia_history.pop(tempo_antigo, None)
+
+                # Converte a memória acumulada em um DataFrame para plotar
+                df_ia_hist = pd.DataFrame(
+                    list(st.session_state.ia_history.items()), 
+                    columns=["datetime", "ia_past_pred"]
+                ).sort_values("datetime")
+
             except Exception as e:
                 ia_status_msg = f"Erro na inferência: {e}"
                 future_df = None
@@ -501,12 +525,22 @@ def dashboard():
         fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor1"], name="Sensor 1", mode="lines", line=dict(color="#38bdf8", width=2)))
         fig.add_trace(go.Scatter(x=df["datetime"], y=df["sensor2"], name="Sensor 2", mode="lines", line=dict(color="#a78bfa", width=2)))
         
-        # Inserção explícita da linha de predição
+        ## ── NOVO: Adiciona a linha do histórico acumulado de predições passadas ──
+        if ia_enabled and 'df_ia_hist' in locals() and not df_ia_hist.empty:
+            fig.add_trace(go.Scatter(
+                x=df_ia_hist["datetime"], 
+                y=df_ia_hist["ia_past_pred"], 
+                name="Histórico IA (Passado)",
+                mode="lines", 
+                line=dict(color="#f43f5e", width=2, dash="dot") # Linha pontilhada rosa/coral para destaque
+            ))
+
+        # Inserção explícita da linha de predição futura (6 passos à frente)
         if ia_enabled and future_df is not None:
             fig.add_trace(go.Scatter(
                 x=future_df["datetime"], 
                 y=future_df["forecast"], 
-                name="Previsão IA (6 passos)",
+                name="Projeção IA (+6 passos)",
                 mode="lines+markers", 
                 marker=dict(size=7, symbol="circle"),
                 line=dict(color="#10b981", width=3, dash="dash")
@@ -518,14 +552,13 @@ def dashboard():
             
         fig.add_hline(y=alert_t, line_dash="dash", line_color="rgba(239,68,68,0.5)")
         
-        # --- SOLUÇÃO APLICADA AQUI: Adicionado a formatação de fonte da legenda ---
         fig.update_layout(
             height=350, 
             template="plotly_dark", 
             paper_bgcolor="rgba(0,0,0,0)", 
             plot_bgcolor="rgba(0,0,0,0)", 
             yaxis=dict(autorange=True),
-            legend=dict(font=dict(color="white")) # <-- Código adicionado para forçar a cor branca
+            legend=dict(font=dict(color="white"))
         )
         st.plotly_chart(fig, use_container_width=True)
 
